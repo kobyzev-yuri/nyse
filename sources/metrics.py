@@ -4,6 +4,7 @@ from typing import List, Optional
 from finvizfinance.quote import finvizfinance
 
 from .models import Ticker, TickerMetrics
+from .symbols import finviz_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class Source:
         return [self._fetch_ticker(ticker) for ticker in tickers]
 
     def _fetch_ticker(self, ticker: Ticker) -> TickerMetrics:
-        stock = finvizfinance(parse_ticker(ticker))
+        stock = finvizfinance(finviz_symbol(ticker))
         data = stock.ticker_fundament()
 
         pp = self._parse_percent
@@ -44,38 +45,3 @@ class Source:
             raise ValueError("Missing float value")
 
         return float(value)
-
-
-def parse_ticker(ticker: Ticker) -> str:
-    if ticker == Ticker.SNDK:
-        return "SNDK"
-    elif ticker == Ticker.QQQ:
-        return "QQQ"
-    elif ticker == Ticker.SMH:
-        return "SMH"
-    elif ticker == Ticker.MU:
-        return "MU"
-    elif ticker == Ticker.NVDA:
-        return "NVDA"
-    elif ticker == Ticker.TLT:
-        return "TLT"
-    elif ticker == Ticker.VIX:
-        return "VIXY"
-    elif ticker == Ticker.BNO:
-        return "BNO"
-    elif ticker == Ticker.MSFT:
-        return "MSFT"
-    elif ticker == Ticker.META:
-        return "META"
-    elif ticker == Ticker.AMZN:
-        return "AMZN"
-    elif ticker == Ticker.ASML:
-        return "ASML"
-    elif ticker == Ticker.LITE:
-        return "LITE"
-    elif ticker == Ticker.CIEN:
-        return "CIEN"
-    elif ticker == Ticker.NBIS:
-        return "NBIS"
-    elif ticker == Ticker.ORCL:
-        return "ORCL"

@@ -4,6 +4,7 @@ from typing import List, Optional
 from dataclasses import dataclass
 
 from .models import NewsArticle, Ticker
+from .symbols import yfinance_symbol
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,8 @@ class Source:
 
     def _get_articles_for_ticker(self, ticker: Ticker) -> List[NewsArticle]:
         raw_news = (
-            yf.Ticker(parse_ticker(ticker)).get_news(count=self.max_per_ticker) or []
+            yf.Ticker(yfinance_symbol(ticker)).get_news(count=self.max_per_ticker)
+            or []
         )
 
         articles = []
@@ -95,38 +97,3 @@ class Source:
             link=click.get("url") or canonical.get("url"),
             publisher=provider.get("displayName"),
         )
-
-
-def parse_ticker(ticker: Ticker) -> str:
-    if ticker == Ticker.SNDK:
-        return "SNDK"
-    elif ticker == Ticker.QQQ:
-        return "QQQ"
-    elif ticker == Ticker.SMH:
-        return "SMH"
-    elif ticker == Ticker.MU:
-        return "MU"
-    elif ticker == Ticker.NVDA:
-        return "NVDA"
-    elif ticker == Ticker.TLT:
-        return "TLT"
-    elif ticker == Ticker.VIX:
-        return "VIXY"
-    elif ticker == Ticker.BNO:
-        return "BNO"
-    elif ticker == Ticker.MSFT:
-        return "MSFT"
-    elif ticker == Ticker.META:
-        return "META"
-    elif ticker == Ticker.AMZN:
-        return "AMZN"
-    elif ticker == Ticker.ASML:
-        return "ASML"
-    elif ticker == Ticker.LITE:
-        return "LITE"
-    elif ticker == Ticker.CIEN:
-        return "CIEN"
-    elif ticker == Ticker.NBIS:
-        return "NBIS"
-    elif ticker == Ticker.ORCL:
-        return "ORCL"

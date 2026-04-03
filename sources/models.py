@@ -13,7 +13,7 @@ class Ticker(enum.Enum):
     NVDA = "NVDA"
     TLT = "TLT"
     VIX = "^VIX"
-    BNO = "BNO (US Brent Crude Oil Fund)"
+    BNO = "BNO"
     MSFT = "MSFT"
     META = "META"
     AMZN = "AMZN"

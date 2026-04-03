@@ -1,8 +1,10 @@
 import logging
+import warnings
 from typing import Hashable, List, Any, Dict
 from datetime import datetime, timedelta, timezone
 
 from .models import Period, Ticker, Candle
+from .symbols import yfinance_symbol
 
 import yfinance as yf
 import pandas as pd
@@ -26,7 +28,7 @@ class Source:
             end=now,
         )
 
-    def get_dayly_candles(
+    def get_daily_candles(
         self, tickers: List[Ticker], days: int
     ) -> Dict[Ticker, List[Candle]]:
         now = datetime.now(timezone.utc)
@@ -37,6 +39,16 @@ class Source:
             start=now - timedelta(days=days),
             end=now,
         )
+
+    def get_dayly_candles(
+        self, tickers: List[Ticker], days: int
+    ) -> Dict[Ticker, List[Candle]]:
+        warnings.warn(
+            "get_dayly_candles is deprecated; use get_daily_candles",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.get_daily_candles(tickers, days)
 
     def get_minutely_candles(
         self, tickers: List[Ticker], days: int
@@ -53,7 +65,7 @@ class Source:
     def _get_current_prices(self, tickers: List[Ticker]) -> Dict[Ticker, float]:
         result: Dict[Ticker, float] = {}
         for ticker in tickers:
-            yf_ticker = parse_ticker(ticker)
+            yf_ticker = yfinance_symbol(ticker)
             t = yf.Ticker(yf_ticker)
 
             price = t.fast_info.get("lastPrice")
@@ -67,7 +79,7 @@ class Source:
         self, tickers: List[Ticker], period: Period, start: datetime, end: datetime
     ) -> Dict[Ticker, List[Candle]]:
         interval = parse_period(period)
-        yf_tickers = [parse_ticker(t) for t in tickers]
+        yf_tickers = [yfinance_symbol(t) for t in tickers]
 
         logger.info(
             "Downloading candles: [%s - %s] period=%s",
@@ -102,7 +114,8 @@ class Source:
                     period.value,
                 )
                 raise ValueError(
-                    f"No candles returned for ticker=%s, yf_ticker=%s, period=%s"
+                    f"No candles returned for ticker={ticker.value}, "
+                    f"yf_ticker={yf_ticker}, period={period.value}"
                 )
 
             df = data[yf_ticker].dropna()
@@ -138,42 +151,8 @@ def _require_float(value: Any, field: str) -> float:
 def parse_period(period: Period) -> str:
     if period == Period.Day:
         return "1d"
-    elif period == Period.Hour:
+    if period == Period.Hour:
         return "1h"
-    elif period == Period.Minute:
+    if period == Period.Minute:
         return "1m"
-
-
-def parse_ticker(ticker: Ticker) -> str:
-    if ticker == Ticker.SNDK:
-        return "SNDK"
-    elif ticker == Ticker.QQQ:
-        return "QQQ"
-    elif ticker == Ticker.SMH:
-        return "SMH"
-    elif ticker == Ticker.MU:
-        return "MU"
-    elif ticker == Ticker.NVDA:
-        return "NVDA"
-    elif ticker == Ticker.TLT:
-        return "TLT"
-    elif ticker == Ticker.VIX:
-        return "^VIX"
-    elif ticker == Ticker.BNO:
-        return "BNO"
-    elif ticker == Ticker.MSFT:
-        return "MSFT"
-    elif ticker == Ticker.META:
-        return "META"
-    elif ticker == Ticker.AMZN:
-        return "AMZN"
-    elif ticker == Ticker.ASML:
-        return "ASML"
-    elif ticker == Ticker.LITE:
-        return "LITE"
-    elif ticker == Ticker.CIEN:
-        return "CIEN"
-    elif ticker == Ticker.NBIS:
-        return "NBIS"
-    elif ticker == Ticker.ORCL:
-        return "ORCL"
+    raise ValueError(f"Unsupported period: {period!r}")

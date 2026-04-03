@@ -4,6 +4,7 @@ from typing import cast, List, Optional
 from datetime import datetime
 
 from .models import Ticker, Earnings
+from .symbols import yfinance_symbol
 
 import yfinance as yf
 import pandas as pd
@@ -28,7 +29,7 @@ class Source:
         return earnings
 
     def _load_closest_earnings(self, t: Ticker) -> Optional[Earnings]:
-        yf_ticker = yf.Ticker(parse_ticker(t))
+        yf_ticker = yf.Ticker(yfinance_symbol(t))
 
         df = yf_ticker.get_earnings_dates()
         if df is None or df.empty:
@@ -55,38 +56,3 @@ class Source:
             next_earnings_date=cast(datetime, future_dates.min()),
             prev_earnings_date=cast(datetime, past_dates.max()),
         )
-
-
-def parse_ticker(ticker: Ticker) -> str:
-    if ticker == Ticker.SNDK:
-        return "SNDK"
-    elif ticker == Ticker.QQQ:
-        return "QQQ"
-    elif ticker == Ticker.SMH:
-        return "SMH"
-    elif ticker == Ticker.MU:
-        return "MU"
-    elif ticker == Ticker.NVDA:
-        return "NVDA"
-    elif ticker == Ticker.TLT:
-        return "TLT"
-    elif ticker == Ticker.VIX:
-        return "^VIX"
-    elif ticker == Ticker.BNO:
-        return "BNO"
-    elif ticker == Ticker.MSFT:
-        return "MSFT"
-    elif ticker == Ticker.META:
-        return "META"
-    elif ticker == Ticker.AMZN:
-        return "AMZN"
-    elif ticker == Ticker.ASML:
-        return "ASML"
-    elif ticker == Ticker.LITE:
-        return "LITE"
-    elif ticker == Ticker.CIEN:
-        return "CIEN"
-    elif ticker == Ticker.NBIS:
-        return "NBIS"
-    elif ticker == Ticker.ORCL:
-        return "ORCL"

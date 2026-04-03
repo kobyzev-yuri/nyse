@@ -1,4 +1,5 @@
 import logging
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
@@ -75,10 +76,7 @@ class Source:
             if cursor:
                 params["cursor"] = cursor
 
-            response = self.session.get(self.ENDPOINT, params=params, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
+            data = self._get_json_with_retries(params)
             for e in data.get("events", []):
                 events_by_id[e["event_id"]] = e
 
@@ -91,6 +89,35 @@ class Source:
             "events": list(events_by_id.values()),
             "occurrences": all_occurrences,
         }
+
+    def _get_json_with_retries(self, params: dict) -> dict:
+        """Повторы при 429/5xx (как в lse investing_calendar_parser)."""
+        delays = (0, 4, 12)
+        last_error: Exception | None = None
+        for attempt, delay_sec in enumerate(delays):
+            if delay_sec:
+                time.sleep(delay_sec)
+            try:
+                response = self.session.get(
+                    self.ENDPOINT, params=params, timeout=25
+                )
+                if response.status_code == 429 and attempt < len(delays) - 1:
+                    logger.warning(
+                        "Economic calendar 429, retry %s/%s",
+                        attempt + 1,
+                        len(delays),
+                    )
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except (requests.RequestException, ValueError) as e:
+                last_error = e
+                if attempt < len(delays) - 1:
+                    logger.warning("Calendar request failed (%s), retrying", e)
+                    continue
+                raise
+        assert last_error is not None
+        raise last_error
 
     def _parse_calendar(self, data: dict) -> List[CalendarEvent]:
         events_meta = {e["event_id"]: e for e in data["events"]}
