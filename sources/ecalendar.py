@@ -4,7 +4,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
-from .models import Currency, CalendarEvent, CalendarEventImportance
+from domain import CalendarEvent, CalendarEventImportance, Currency
 
 logger = logging.getLogger(__name__)
 

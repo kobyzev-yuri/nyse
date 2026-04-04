@@ -6,12 +6,14 @@
 
 ```
 nyse/
+├── domain.py             # enum Ticker, датаклассы домена (общая модель)
 ├── docs/
 │   ├── architecture.md   ← этот файл
-│   └── dataflow.md       ← схемы «было → стало» (Mermaid)
+│   ├── dataflow.md       ← схемы «было → стало» (Mermaid)
+│   ├── news_calendar_inventory.md  ← инвентаризация новостей/календаря, Marketaux, типизация
+│   └── testing_telegram_plan.md    ← план тестов (новости — фокус), stub техники, Telegram
 └── sources/
-    ├── __init__.py       # публичный API: *Source + символы
-    ├── models.py         # enum Ticker, датаклассы домена
+    ├── __init__.py       # публичный API: *Source + символы; добавляет корень в sys.path
     ├── symbols.py        # yfinance_symbol, finviz_symbol, tickers_from_environ
     ├── candles.py        # OHLCV через yfinance
     ├── metrics.py        # скринер Finviz (finvizfinance)
@@ -35,7 +37,11 @@ nyse/
 | `finviz_symbol` | Строка символа для Finviz (override для VIX → VIXY) |
 | `tickers_from_environ` | Список тикеров из `NYSE_TICKERS` или полный `Ticker` |
 
-## Доменные модели (`models.py`)
+## Доменные модели (`domain.py`)
+
+Файл в **корне репозитория**: типы не привязаны к конкретному источнику данных и могут использоваться сервисами вне `sources/`.
+
+Импорт: `from domain import Ticker, Candle, ...`. При использовании только модулей `sources.*` корень репозитория подставляется в `sys.path` в `sources/__init__.py`; при прямом `import domain` задайте `PYTHONPATH` на корень репозитория или установите пакет в editable-режиме.
 
 - **`Ticker`** — фиксированный universe; значение члена enum = канонический символ для **yfinance** (например `VIX = "^VIX"`, `BNO = "BNO"`).
 - **`Candle`**, **`Period`** — свечи и интервал загрузки.

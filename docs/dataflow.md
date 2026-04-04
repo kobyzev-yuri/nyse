@@ -96,7 +96,7 @@ flowchart LR
         IC["Investing.com API"]
     end
 
-    subgraph out["Модели в models.py"]
+    subgraph out["Модели в domain.py"]
         OHLC["Candle[]"]
         TM["TickerMetrics"]
         ER["Earnings"]

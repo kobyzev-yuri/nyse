@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from finvizfinance.quote import finvizfinance
 
-from .models import Ticker, TickerMetrics
+from domain import Ticker, TickerMetrics
 from .symbols import finviz_symbol
 
 logger = logging.getLogger(__name__)

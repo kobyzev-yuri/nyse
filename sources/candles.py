@@ -3,7 +3,7 @@ import warnings
 from typing import Hashable, List, Any, Dict
 from datetime import datetime, timedelta, timezone
 
-from .models import Period, Ticker, Candle
+from domain import Candle, Period, Ticker
 from .symbols import yfinance_symbol
 
 import yfinance as yf

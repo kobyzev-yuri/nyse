@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from dataclasses import dataclass
 
-from .models import NewsArticle, Ticker
+from domain import NewsArticle, Ticker
 from .symbols import yfinance_symbol
 import yfinance as yf
 

@@ -3,7 +3,7 @@ import pytz
 from typing import cast, List, Optional
 from datetime import datetime
 
-from .models import Ticker, Earnings
+from domain import Earnings, Ticker
 from .symbols import yfinance_symbol
 
 import yfinance as yf

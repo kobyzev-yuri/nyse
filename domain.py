@@ -1,7 +1,7 @@
 import enum
-from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 
 # --------- Ticker ----------
@@ -34,19 +34,6 @@ class Ticker(enum.Enum):
 
 
 # --------- Calendar ----------
-@dataclass
-class CalendarEvent:
-    name: str
-    category: str
-    time: datetime
-    country: str
-    currency: Currency
-    importance: CalendarEventImportance
-    actual: Optional[str]
-    forecast: Optional[str]
-    previous: Optional[str]
-
-
 class Currency(enum.Enum):
     USD = "USD"
     CHF = "CHF"
@@ -59,6 +46,19 @@ class Currency(enum.Enum):
 class CalendarEventImportance(enum.Enum):
     HIGH = "high"
     MODERATE = "moderate"
+
+
+@dataclass
+class CalendarEvent:
+    name: str
+    category: str
+    time: datetime
+    country: str
+    currency: Currency
+    importance: CalendarEventImportance
+    actual: Optional[str]
+    forecast: Optional[str]
+    previous: Optional[str]
 
 
 # --------- Candles ----------

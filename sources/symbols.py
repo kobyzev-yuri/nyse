@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Iterable, List
 
-from .models import Ticker
+from domain import Ticker
 
 _FINVIZ_OVERRIDES = {
     # Finviz quote screener: VIX index как ^VIX часто недоступен; VIXY — близкий ETF.
