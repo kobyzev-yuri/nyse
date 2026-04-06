@@ -3,8 +3,11 @@
 Все модули тестов в `tests/unit/` используют эти фикстуры.
 
 Конфигурация секретов (LLM, ProxyAPI): в обычных юнит-тестах не используется.
-См. docs/configuration.md и `config_loader.py`. Для опциональных интеграционных тестов —
-фикстура `load_nyse_config` (подгружает config.env по NYSE_CONFIG_PATH или config.env).
+См. docs/configuration.md и `config_loader.py`.
+
+Фикстуры:
+- `load_nyse_config` — подмешать `config.env` / `NYSE_CONFIG_PATH` / `../lse/config.env`.
+- `require_openai_settings` — `load_nyse_config` + skip, если нет `OPENAI_API_KEY`.
 """
 
 from __future__ import annotations
@@ -46,8 +49,19 @@ def default_thresholds():
 
 @pytest.fixture
 def load_nyse_config():
-    """Опционально: подмешать переменные из config.env (для integration-тестов с LLM)."""
+    """Подмешать переменные из config.env (для integration-тестов)."""
     import config_loader
 
     config_loader.load_config_env()
     return True
+
+
+@pytest.fixture
+def require_openai_settings(load_nyse_config):
+    """Настройки OpenAI/ProxyAPI или skip, если ключ не задан."""
+    import config_loader
+
+    s = config_loader.get_openai_settings()
+    if s is None:
+        pytest.skip("Нет OPENAI_API_KEY: создайте nyse/config.env из config.env.example")
+    return s

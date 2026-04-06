@@ -33,3 +33,29 @@
 - **Интеграционные тесты** с реальным LLM (когда появятся): помечайте `@pytest.mark.integration`, в начале пропускайте, если нет `OPENAI_API_KEY`, или вызывайте опциональную фикстуру **`load_nyse_config`** (см. `conftest.py`).
 
 Так CI и локальные прогоны без секретов остаются зелёными.
+
+## Запуск тестов
+
+**Только юнит-тесты** (без сети и без `config.env`):
+
+```bash
+conda activate py11
+cd /path/to/nyse
+pip install -e ".[dev]"
+# dev включает pytest, yfinance, pandas — нужны для integration и sources
+python -m pytest tests/unit/ -q
+```
+
+**Интеграционные** (нужны `config.env` с `OPENAI_API_KEY`, для Yahoo — сеть):
+
+```bash
+python -m pytest tests/integration/ -v -m integration
+```
+
+**Всё** (юнит + интеграция):
+
+```bash
+python -m pytest tests/ -v
+```
+
+Или `./scripts/run_tests.sh tests/ -v`.

@@ -15,9 +15,16 @@ include = ["sources*", "pipeline*"]
 py-modules = ["domain", "config_loader"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = [
+    "pytest>=7.0",
+    "yfinance>=0.2",
+    "pandas>=2.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+markers = [
+    "integration: сеть и/или config.env",
+]
