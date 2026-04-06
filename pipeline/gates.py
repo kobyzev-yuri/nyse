@@ -18,14 +18,18 @@ def decide_llm_mode(cfg: ThresholdConfig, ctx: GateContext) -> LLMMode:
     if ctx.regime_present and ctx.regime_rule_confidence >= cfg.t2_regime_confidence:
         return LLMMode.FULL
 
-    if ctx.article_count > cfg.max_articles_full_batch:
-        return LLMMode.LITE
-
     ab = abs(ctx.draft_bias)
+
+    # Сильный черновой сигнал имеет приоритет над лимитом статей.
+    if ab >= cfg.t1_abs_draft_bias * 2.0:
+        return LLMMode.FULL
+
+    # Спокойный фон без REGIME → пропускаем LLM.
     if ab < cfg.t1_abs_draft_bias and not ctx.regime_present:
         return LLMMode.SKIP
 
-    if ab >= cfg.t1_abs_draft_bias * 2.0:
-        return LLMMode.FULL
+    # Умеренный сигнал: если статей слишком много — lite-промпт.
+    if ctx.article_count > cfg.max_articles_full_batch:
+        return LLMMode.LITE
 
     return LLMMode.LITE

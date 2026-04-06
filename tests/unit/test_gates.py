@@ -58,3 +58,51 @@ def test_gate_bias_branches(default_thresholds, bias, mode):
         article_count=4,
     )
     assert decide_llm_mode(default_thresholds, ctx) == mode
+
+
+def test_gate_strong_bias_overrides_article_count():
+    """Сильный bias >= T1*2 должен давать FULL даже если статей > N."""
+    cfg = ThresholdConfig(
+        t1_abs_draft_bias=0.25,
+        max_articles_full_batch=15,
+    )
+    ctx = GateContext(
+        draft_bias=0.55,  # >= T1*2 = 0.50
+        regime_present=False,
+        regime_rule_confidence=0.0,
+        calendar_high_soon=False,
+        article_count=30,  # > N=15
+    )
+    assert decide_llm_mode(cfg, ctx) == LLMMode.FULL
+
+
+def test_gate_many_articles_moderate_bias_is_lite():
+    """Умеренный bias при большом числе статей → LITE, не SKIP."""
+    cfg = ThresholdConfig(
+        t1_abs_draft_bias=0.25,
+        max_articles_full_batch=15,
+    )
+    ctx = GateContext(
+        draft_bias=0.35,  # T1 < bias < T1*2
+        regime_present=False,
+        regime_rule_confidence=0.0,
+        calendar_high_soon=False,
+        article_count=30,  # > N=15
+    )
+    assert decide_llm_mode(cfg, ctx) == LLMMode.LITE
+
+
+def test_gate_calm_many_articles_is_skip():
+    """Нейтральный фон (bias < T1) с большим числом статей → SKIP, не LITE."""
+    cfg = ThresholdConfig(
+        t1_abs_draft_bias=0.25,
+        max_articles_full_batch=15,
+    )
+    ctx = GateContext(
+        draft_bias=0.05,  # < T1
+        regime_present=False,
+        regime_rule_confidence=0.0,
+        calendar_high_soon=False,
+        article_count=50,
+    )
+    assert decide_llm_mode(cfg, ctx) == LLMMode.SKIP

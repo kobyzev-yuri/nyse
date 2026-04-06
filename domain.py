@@ -22,6 +22,8 @@ class Ticker(enum.Enum):
     CIEN = "CIEN"
     NBIS = "NBIS"
     ORCL = "ORCL"
+    # Лента без привязки к одному тикеру (RSS макро и т.п.)
+    GENERAL = "GENERAL"
 
     def is_stock(self):
         return self not in {
@@ -30,6 +32,7 @@ class Ticker(enum.Enum):
             Ticker.TLT,
             Ticker.VIX,
             Ticker.BNO,
+            Ticker.GENERAL,
         }
 
 
@@ -108,3 +111,58 @@ class NewsArticle:
     summary: Optional[str]
     link: Optional[str]
     publisher: Optional[str]
+    provider_id: Optional[str] = None  # yfinance, newsapi, marketaux, rss, …
+    raw_sentiment: Optional[float] = None  # −1…1, если провайдер отдаёт (Marketaux entity)
+    cheap_sentiment: Optional[float] = None  # −1…1: уровень 2 (API или локальная модель)
+
+
+# --------- Level 5: structured LLM signal (align with pystockinvest `agent/models.py`) ---------
+# Контракт полей — тот же, что у Kerima / NewsSignalAgent, чтобы позже склеить репозитории.
+
+
+class NewsTimeHorizon(str, enum.Enum):
+    INTRADAY = "intraday"
+    SHORT = "1-3d"
+    MEDIUM = "3-7d"
+    LONG = "long"
+
+
+class NewsSurprise(str, enum.Enum):
+    NONE = "none"
+    MINOR = "minor"
+    SIGNIFICANT = "significant"
+    MAJOR = "major"
+
+
+class NewsImpact(str, enum.Enum):
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+
+
+class NewsRelevance(str, enum.Enum):
+    MENTION = "mention"
+    RELATED = "related"
+    PRIMARY = "primary"
+
+
+@dataclass
+class NewsSignal:
+    """Один сигнал на статью после structured LLM (уровень 5)."""
+
+    sentiment: float
+    impact_strength: NewsImpact
+    relevance: NewsRelevance
+    surprise: NewsSurprise
+    time_horizon: NewsTimeHorizon
+    confidence: float
+
+
+@dataclass
+class AggregatedNewsSignal:
+    """Агрегат по окну/батчу статей (как `AggregatedNewsSignal` в pystockinvest)."""
+
+    bias: float
+    confidence: float
+    summary: list[str]
+    items: list[NewsSignal]

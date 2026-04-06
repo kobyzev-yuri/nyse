@@ -96,4 +96,5 @@ class Source:
             timestamp=datetime.fromisoformat(pub_date.replace("Z", "+00:00")),
             link=click.get("url") or canonical.get("url"),
             publisher=provider.get("displayName"),
+            provider_id="yfinance",
         )

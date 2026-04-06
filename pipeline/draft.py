@@ -35,11 +35,7 @@ def draft_impulse(
     """
     now = now or datetime.now(timezone.utc)
     if not articles:
-        return DraftImpulse(
-            draft_bias_incremental=0.0,
-            regime_stress=0.0,
-            policy_stress=0.0,
-        )
+        return DraftImpulse()
 
     lam = math.log(2) / max(half_life_hours, 1e-6)
 
@@ -56,6 +52,8 @@ def draft_impulse(
     inc: List[Tuple[float, float]] = []
     reg: List[Tuple[float, float]] = []
     pol: List[Tuple[float, float]] = []
+    wsum_inc = wsum_reg = wsum_pol = 0.0
+    max_abs_reg = max_abs_pol = 0.0
 
     for a in articles:
         age = _age_hours(now, a.published_at)
@@ -63,16 +61,55 @@ def draft_impulse(
         pair = (w, a.cheap_sentiment)
         if a.channel == NewsImpactChannel.INCREMENTAL:
             inc.append(pair)
+            wsum_inc += w
         elif a.channel == NewsImpactChannel.REGIME:
             reg.append(pair)
+            wsum_reg += w
+            max_abs_reg = max(max_abs_reg, abs(a.cheap_sentiment))
         else:
             pol.append(pair)
+            wsum_pol += w
+            max_abs_pol = max(max_abs_pol, abs(a.cheap_sentiment))
 
     return DraftImpulse(
         draft_bias_incremental=weighted_mean(inc),
         regime_stress=weighted_mean([(w, abs(x)) for w, x in reg]) if reg else 0.0,
         policy_stress=weighted_mean([(w, abs(x)) for w, x in pol]) if pol else 0.0,
+        articles_incremental=len(inc),
+        articles_regime=len(reg),
+        articles_policy=len(pol),
+        weight_sum_incremental=wsum_inc,
+        weight_sum_regime=wsum_reg,
+        weight_sum_policy=wsum_pol,
+        max_abs_regime=max_abs_reg,
+        max_abs_policy=max_abs_pol,
     )
+
+
+def scored_from_news_articles(articles: Sequence["NewsArticle"]) -> List[ScoredArticle]:
+    """
+    Уровень 3: ``NewsArticle`` с уже заполненным ``cheap_sentiment`` (после этапа B)
+    + классификация канала → ``ScoredArticle`` для ``draft_impulse``.
+    Если ``cheap_sentiment`` ещё None — подставляется 0.0.
+    """
+    from domain import NewsArticle
+
+    from .channels import classify_channel
+
+    out: List[ScoredArticle] = []
+    for a in articles:
+        if not isinstance(a, NewsArticle):
+            raise TypeError("expected NewsArticle")
+        ch, _ = classify_channel(a.title, a.summary)
+        cs = a.cheap_sentiment if a.cheap_sentiment is not None else 0.0
+        out.append(
+            ScoredArticle(
+                published_at=a.timestamp,
+                cheap_sentiment=cs,
+                channel=ch,
+            )
+        )
+    return out
 
 
 def single_scalar_draft_bias(d: DraftImpulse) -> float:

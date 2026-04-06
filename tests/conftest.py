@@ -8,6 +8,7 @@
 Фикстуры:
 - `load_nyse_config` — подмешать `config.env` / `NYSE_CONFIG_PATH` / `../lse/config.env`.
 - `require_openai_settings` — `load_nyse_config` + skip, если нет `OPENAI_API_KEY`.
+- `require_newsapi_key` / `require_marketaux_key` / `require_alphavantage_key` — skip без ключей в config.env.
 """
 
 from __future__ import annotations
@@ -65,3 +66,33 @@ def require_openai_settings(load_nyse_config):
     if s is None:
         pytest.skip("Нет OPENAI_API_KEY: создайте nyse/config.env из config.env.example")
     return s
+
+
+@pytest.fixture
+def require_newsapi_key(load_nyse_config):
+    import config_loader
+
+    k = config_loader.get_newsapi_key()
+    if not k:
+        pytest.skip("Нет NEWSAPI_KEY в config.env")
+    return k
+
+
+@pytest.fixture
+def require_marketaux_key(load_nyse_config):
+    import config_loader
+
+    k = config_loader.get_marketaux_api_key()
+    if not k:
+        pytest.skip("Нет MARKETAUX_API_KEY в config.env")
+    return k
+
+
+@pytest.fixture
+def require_alphavantage_key(load_nyse_config):
+    import config_loader
+
+    k = config_loader.get_alphavantage_api_key()
+    if not k:
+        pytest.skip("Нет ALPHAVANTAGE_KEY в config.env")
+    return k

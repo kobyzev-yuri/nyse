@@ -89,3 +89,85 @@ def get_openai_settings() -> Optional[OpenAISettings]:
 def get_config_value(key: str, default: Optional[str] = None) -> Optional[str]:
     load_config_env()
     return os.environ.get(key, default)
+
+
+def get_newsapi_key() -> Optional[str]:
+    """Ключ NewsAPI (newsapi.org); None, если не задан."""
+    load_config_env()
+    k = (os.environ.get("NEWSAPI_KEY") or "").strip()
+    return k or None
+
+
+def get_marketaux_api_key() -> Optional[str]:
+    """Ключ Marketaux; None, если не задан."""
+    load_config_env()
+    k = (os.environ.get("MARKETAUX_API_KEY") or "").strip()
+    return k or None
+
+
+def get_alphavantage_api_key() -> Optional[str]:
+    """Ключ Alpha Vantage (как в lse: ALPHAVANTAGE_KEY); None, если не задан."""
+    load_config_env()
+    k = (
+        os.environ.get("ALPHAVANTAGE_KEY")
+        or os.environ.get("ALPHAVANTAGE_API_KEY")
+        or ""
+    ).strip()
+    return k or None
+
+
+def get_sentiment_model_name() -> str:
+    """HuggingFace id для локального сентимента (по умолчанию FinBERT)."""
+    load_config_env()
+    return (os.environ.get("SENTIMENT_MODEL") or "ProsusAI/finbert").strip()
+
+
+def sentiment_local_enabled() -> bool:
+    """Включить ли transformers при отсутствии raw_sentiment (по умолчанию да)."""
+    load_config_env()
+    raw = (os.environ.get("NYSE_SENTIMENT_LOCAL") or "true").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def sentiment_cache_ttl_sec() -> int:
+    load_config_env()
+    return int(float(os.environ.get("NYSE_SENTIMENT_CACHE_TTL_SEC") or "86400"))
+
+
+def calendar_high_before_minutes() -> int:
+    """За сколько минут до HIGH-события считать «скоро» (гейт C)."""
+    load_config_env()
+    return int(float(os.environ.get("NYSE_CALENDAR_HIGH_BEFORE_MIN") or "120"))
+
+
+def calendar_high_after_minutes() -> int:
+    """Сколько минут после HIGH-события ещё считать окно «скоро» (релиз прошёл)."""
+    load_config_env()
+    return int(float(os.environ.get("NYSE_CALENDAR_HIGH_AFTER_MIN") or "60"))
+
+
+def nyse_cache_root() -> Path:
+    """Корень файлового кэша nyse (по умолчанию ``./.cache/nyse``)."""
+    load_config_env()
+    raw = (os.environ.get("NYSE_CACHE_ROOT") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path(__file__).resolve().parent / ".cache" / "nyse"
+
+
+def news_raw_cache_ttl_sec() -> int:
+    """TTL списка статей с провайдера (сырьё)."""
+    load_config_env()
+    return int(float(os.environ.get("NYSE_NEWS_RAW_TTL_SEC") or "1800"))
+
+
+def news_aggregate_cache_ttl_sec() -> int:
+    """TTL закэшированного чернового импульса (агрегат)."""
+    load_config_env()
+    return int(float(os.environ.get("NYSE_NEWS_AGGREGATE_TTL_SEC") or "1800"))
+
+
+def llm_cache_ttl_sec() -> int:
+    """TTL ответов LLM (даджест / completion) в файловом кэше (этап F)."""
+    load_config_env()
+    return int(float(os.environ.get("NYSE_LLM_CACHE_TTL_SEC") or "86400"))

@@ -24,3 +24,13 @@ def test_get_openai_settings_none_without_key(monkeypatch):
     monkeypatch.delenv("NYSE_CONFIG_PATH", raising=False)
     monkeypatch.setattr(config_loader, "config_env_path", lambda: Path("/nonexistent"))
     assert config_loader.get_openai_settings() is None
+
+
+def test_llm_cache_ttl_sec_default(monkeypatch):
+    monkeypatch.delenv("NYSE_LLM_CACHE_TTL_SEC", raising=False)
+    assert config_loader.llm_cache_ttl_sec() == 86400
+
+
+def test_llm_cache_ttl_sec_override(monkeypatch):
+    monkeypatch.setenv("NYSE_LLM_CACHE_TTL_SEC", "3600")
+    assert config_loader.llm_cache_ttl_sec() == 3600

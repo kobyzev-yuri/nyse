@@ -56,7 +56,7 @@ conda run -n py11 python -m pytest tests/ -q
 - **`sources/news.py`**, нормализаторы: фикстуры JSON «как ответ Yahoo» → список `NewsArticle`.
 - **`ecalendar`**: замокать `requests` / записать `vcr`-подобные ответы в `tests/fixtures/http/`.
 - **`symbols`**: `yfinance_symbol` / `finviz_symbol` / `tickers_from_environ`.
-- **Кэш** (когда появится): ключ, TTL, повторный запрос без HTTP.
+- **Кэш:** новости и draft — `pipeline/news_cache.py`; ответы LLM (lite-дайджест) — `pipeline/llm_cache.py` + юнит-тесты `tests/unit/test_llm_*.py` (mock HTTP без сети).
 
 Запуск: `pytest -q` из корня nyse.
 
