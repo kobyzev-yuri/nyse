@@ -6,28 +6,55 @@
 
 ```
 nyse/
-├── domain.py             # enum Ticker, датаклассы домена (общая модель)
-├── config_loader.py      # OPENAI_* из config.env / NYSE_CONFIG_PATH / ../lse/config.env
+├── README.md             # ← точка входа: обзор, схемы потоков, быстрый старт
+├── domain.py             # enum Ticker, NewsArticle, NewsSignal, AggregatedNewsSignal, Trade
+├── config_loader.py      # OPENAI_*, NYSE_* из config.env
 ├── config.env.example    # шаблон; config.env в .gitignore
+├── pyproject.toml        # зависимости (pydantic, yfinance, requests…)
 ├── scripts/
-│   └── run_tests.sh    # pytest через conda env py11
+│   ├── run_tests.sh      # pytest через conda env py11
+│   └── calibrate_gate.py # офлайн-калибровка T1/T2/N на реальных данных
 ├── docs/
-│   ├── architecture.md   ← этот файл
-│   ├── dataflow.md       ← схемы «было → стало» (Mermaid)
-│   ├── configuration.md  # секреты, ProxyAPI, поведение в тестах
-│   ├── news_calendar_inventory.md  ← инвентаризация новостей/календаря, Marketaux, типизация
-│   ├── testing_telegram_plan.md    ← план тестов (новости — фокус), stub техники, Telegram
-│   ├── news_cache_and_impulse_proposals.md  ← кэш без БД, свежесть, макро, методы импульса
-│   └── news_pipeline_hierarchy.md   ← §5.4 + FinBERT + Kerima LLM + пороги и кэш
-├── pipeline/           # каналы §5.4, черновой импульс, гейты LLM, FileCache (без LLM)
+│   ├── architecture.md          ← этот файл
+│   ├── dataflow.md              ← Mermaid-схемы полного потока (обновлено)
+│   ├── calibration.md           ← журнал калибровки T1/T2/N (этап G)
+│   ├── configuration.md         # секреты, ProxyAPI
+│   ├── news_pipeline_hierarchy.md       # уровни 0–6, пороги
+│   ├── news_sources_testing_and_pipeline_roadmap.md  # дорожная карта A–G
+│   ├── testing_telegram_plan.md
+│   ├── news_cache_and_impulse_proposals.md
+│   └── news_calendar_inventory.md
+├── pipeline/             # Новостной пайплайн (уровни 0–5, LLM, кэш)
+│   ├── types.py          # DraftImpulse, ThresholdConfig, PROFILE_GAME5M, PROFILE_CONTEXT
+│   ├── ingest.py         # ур. 0: слияние, дедуп
+│   ├── channels.py       # ур. 1: NewsImpactChannel
+│   ├── sentiment.py      # ур. 2: cheap_sentiment + price_pattern_boost
+│   ├── draft.py          # ур. 3: DraftImpulse
+│   ├── calendar_context.py  # этап C: calendar_high_soon
+│   ├── gates.py          # ур. 4: decide_llm_mode
+│   ├── news_cache.py     # этап E: FileCache для статей/draft
+│   ├── llm_client.py     # этап F: HTTP LLM client
+│   ├── llm_cache.py      # этап F: кэш LLM-ответов
+│   ├── llm_digest.py     # этап F: lite-дайджест
+│   ├── news_signal_schema.py    # ур. 5: Pydantic-схема LLM-ответа
+│   ├── llm_batch_plan.py        # ур. 5: отбор батча
+│   ├── news_signal_aggregator.py  # ур. 5: агрегация → AggregatedNewsSignal
+│   ├── news_signal_prompt.py    # ур. 5: Kerima-стиль промпт
+│   ├── news_signal_runner.py    # ур. 5: оркестратор
+│   └── cache.py          # FileCache (базовый)
 └── sources/
-    ├── __init__.py       # публичный API: *Source + символы; добавляет корень в sys.path
-    ├── symbols.py        # yfinance_symbol, finviz_symbol, tickers_from_environ
-    ├── candles.py        # OHLCV через yfinance
-    ├── metrics.py        # скринер Finviz (finvizfinance)
-    ├── earnings.py       # даты отчётности через yfinance
-    ├── ecalendar.py      # макро-календарь (JSON Investing.com)
-    └── news.py           # лента Yahoo через yfinance
+    ├── __init__.py       # публичный API: *Source + символы
+    ├── symbols.py        # yfinance_symbol, finviz_symbol
+    ├── candles.py        # OHLCV
+    ├── metrics.py        # Finviz
+    ├── earnings.py       # даты отчётности
+    ├── ecalendar.py      # Investing.com JSON
+    ├── news.py           # Yahoo (yfinance)
+    ├── news_newsapi.py   # NewsAPI v2
+    ├── news_marketaux.py # Marketaux v1
+    ├── news_alphavantage.py  # Alpha Vantage NEWS_SENTIMENT
+    ├── news_rss.py       # RSS/Atom
+    └── news_shared.py    # общие утилиты
 ```
 
 ## Публичный API
