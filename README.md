@@ -1,221 +1,194 @@
-# nyse — News Pipeline & Data Layer
+# nyse — News Pipeline & Market Data
 
-Пакет **nyse** — слой сбора рыночных данных и обработки новостей для US-инструментов.  
-Работает совместно с **pystockinvest** (сигналы, агент, TradeBuilder) и **lse** (PostgreSQL, GAME_5M, исполнение).
+Автономный пакет для сбора рыночных данных и обработки финансовых новостей.  
+**Хранилище:** `FileCache` (JSON-файлы в `.cache/nyse`). PostgreSQL не требуется.
 
 ---
 
 ## Быстрый старт
 
 ```bash
-# установка в editable-режиме (conda env py11)
 conda activate py11
-pip install -e ".[sentiment]"
+pip install -e ".[sentiment]"          # +transformers для FinBERT
 
-# конфиг
-cp config.env.example config.env   # заполни OPENAI_*, ключи API
+cp config.env.example config.env       # заполни OPENAI_*, ключи API
 
-# тесты
-python -m pytest tests/unit/ -q                          # 140 unit-тестов, без сети
-python -m pytest tests/ -v -m integration                # интеграционные (нужна сеть)
+python -m pytest tests/unit/ -q        # 140 тестов, без сети
+python -m pytest tests/ -m integration # smoke-тесты (нужна сеть)
 
-# калибровка гейта
+# калибровка гейта на реальных данных
 python scripts/calibrate_gate.py --profile game5m --tickers SNDK NBIS CIEN --days 1
 python scripts/calibrate_gate.py --profile context --tickers MSFT META NVDA --days 3
 ```
 
 ---
 
-## Архитектура системы
+## Поток данных
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                         lse (исполнение)                          │
-│  PostgreSQL · GAME_5M · positions · CatBoost · Telegram bot       │
-└────────────────────────────┬──────────────────────────────────────┘
-                             │ Trade (entry_type, position, summaries)
-┌────────────────────────────▼──────────────────────────────────────┐
-│                    pystockinvest / Orchestrator                    │
-│                                                                    │
-│   TechnicalAgent ──┐                                               │
-│   NewsAgent     ───┼──► TradeBuilder ──► domain.Trade             │
-│   CalendarAgent ──┘                                                │
-└──────┬──────────────────────┬────────────────────────┬────────────┘
-       │ TechnicalSignal      │ AggregatedNewsSignal   │ CalendarSignal
-       │                      │                        │
-  [техника]           ┌───────▼──────────┐        [calendar]
-  CatBoost /          │  nyse pipeline   │        sources/ecalendar
-  TA-модели           │  (этот пакет)    │
-                      └──────────────────┘
-```
-
----
-
-## Полный поток данных: от источника к сделке
-
-```
-                         ┌─────────────────────────────────┐
-                         │      ВНЕШНИЕ ИСТОЧНИКИ          │
-                         │                                 │
-  Yahoo (yfinance) ──────►  NewsArticle[]                  │
-  Marketaux ─────────────►  NewsArticle[] + raw_sentiment  │
-  NewsAPI ────────────────►  NewsArticle[]                  │
-  RSS / Alpha Vantage ───►  NewsArticle[]                  │
-                         └──────────┬──────────────────────┘
-                                    │
-                         ╔══════════▼══════════╗
-                         ║   УРОВЕНЬ 0         ║
-                         ║  Слияние и дедуп    ║
-                         ║  pipeline/ingest    ║
-                         ╚══════════╤══════════╝
-                                    │ NewsArticle[] (уникальные, в окне)
-                         ╔══════════▼══════════╗
-                         ║   УРОВЕНЬ 1         ║
-                         ║  NewsImpactChannel  ║  ← словари: war/sanctions/Fed/FOMC
-                         ║  pipeline/channels  ║
-                         ╚══════════╤══════════╝
-                                    │ channel: INCREMENTAL | REGIME | POLICY_RATES
-                         ╔══════════▼══════════╗
-                         ║   УРОВЕНЬ 2         ║
-                         ║  cheap_sentiment    ║  ← raw_sentiment API (приоритет)
-                         ║  pipeline/sentiment ║  ← FinBERT (локально)
-                         ║                     ║  ← price_pattern_boost (floor)
-                         ╚══════════╤══════════╝
-                                    │ cheap_sentiment ∈ [−1, 1]
-                         ╔══════════▼══════════╗
-                         ║   УРОВЕНЬ 3         ║
-                         ║  DraftImpulse       ║  ← экспоненциальное затухание (T½=12ч)
-                         ║  pipeline/draft     ║  ← отдельно по каналам (не мешать)
-                         ╚══════════╤══════════╝
-                                    │ draft_bias, regime_stress, policy_stress
-                         ╔══════════▼══════════╗
-                         ║   УРОВЕНЬ 4 (ГЕЙТ)  ║
-                         ║  decide_llm_mode    ║  ← ThresholdConfig: T1, T2, N
-                         ║  pipeline/gates     ║  ← CalendarEvent HIGH → FULL
-                         ╚══════════╤══════════╝
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              │                     │                     │
-           SKIP                   LITE                  FULL
-           (draft_bias             │                     │
-           возвращается)    ╔══════▼════════╗   ╔══════▼════════╗
-                            ║  lite-дайджест ║   ║  Уровень 5    ║
-                            ║  llm_digest   ║   ║  LLM (Kerima) ║
-                            ╚══════╤════════╝   ╚══════╤════════╝
-                                   │                   │
-                                   └─────────┬─────────┘
-                                             │
-                                  ╔══════════▼══════════╗
-                                  ║  AggregatedNewsSignal║
-                                  ║  bias, confidence   ║
-                                  ╚══════════╤══════════╝
-                                             │
-                               ┌─────────────▼─────────────┐
-                               │      TradeBuilder          │
-                               │  (pystockinvest)           │
-                               │                            │
-                               │  final_bias =              │
-                               │    0.55 × tech_bias        │
-                               │  + 0.30 × news_bias        │
-                               │  + 0.15 × calendar_bias    │
-                               └─────────────┬─────────────┘
-                                             │
-                                      domain.Trade
+  Yahoo (yfinance) ──────┐
+  Marketaux ─────────────┤  raw NewsArticle[]
+  NewsAPI / RSS ──────────┤  (+ raw_sentiment с API)
+  Alpha Vantage ─────────┘
+          │
+  ╔═══════▼════════╗
+  ║  Уровень 0     ║  pipeline/ingest.py
+  ║  Слияние,      ║  дедуп по URL, окно времени
+  ║  дедупликация  ║
+  ╚═══════╤════════╝
+          │ NewsArticle[] (уникальные)
+  ╔═══════▼════════╗
+  ║  Уровень 1     ║  pipeline/channels.py
+  ║  Канал         ║  словари: war/sanctions → REGIME
+  ║  воздействия   ║  Fed/FOMC → POLICY_RATES
+  ╚═══════╤════════╝  иначе → INCREMENTAL
+          │ NewsImpactChannel
+  ╔═══════▼════════╗
+  ║  Уровень 2     ║  pipeline/sentiment.py
+  ║  cheap_        ║  1. raw_sentiment от API
+  ║  sentiment     ║  2. FinBERT (TTL-кэш)
+  ╚═══════╤════════╝  3. price_pattern_boost (floor)
+          │ float ∈ [−1, 1]
+  ╔═══════▼════════╗
+  ║  Уровень 3     ║  pipeline/draft.py
+  ║  DraftImpulse  ║  экспоненциальное затухание T½=12ч
+  ╚═══════╤════════╝  INCREMENTAL / REGIME / POLICY отдельно
+          │ draft_bias, regime_stress, policy_stress
+  ╔═══════▼════════╗
+  ║  Уровень 4     ║  pipeline/gates.py
+  ║  ГЕЙТ          ║  ThresholdConfig: T1, T2, N
+  ╚═══╤══╤══╤═════╝  + CalendarEvent HIGH
+      │  │  │
+    SKIP LITE FULL
+      │   │    │
+      │  llm_digest  ──────────────────┐
+      │  (lite-промпт)                 │
+      │                         news_signal_runner.py
+      │                         LLM → Pydantic → агрегация
+      │                                │
+      └────────────────┬───────────────┘
+                       │
+          ╔════════════▼═══════════╗
+          ║  AggregatedNewsSignal  ║  ← ВЫХОД пакета
+          ║  bias      ∈ [−1, +1] ║
+          ║  confidence ∈ [0,  1] ║
+          ║  summary   list[str]  ║
+          ║  items     NewsSignal[]║
+          ╚════════════════════════╝
 ```
 
 ---
 
-## Технический сигнал Kerima (`TechnicalSignal`)
+## Уровни пайплайна
 
-Вычисляется в **pystockinvest** независимо от новостей.
-
-```
-TechnicalSignal
-├── bias                        ∈ [−1, +1]   итоговое направление
-├── trend_score                 ∈ [0, 1]     сила тренда (MA, EMA)
-├── momentum_score              ∈ [0, 1]     импульс (RSI, ROC)
-├── mean_reversion_score        ∈ [0, 1]     откат к среднему (Bollinger)
-├── breakout_score              ∈ [0, 1]     пробой уровня
-├── volatility_regime           ∈ [0, 1]     режим волатильности (ATR/VIX)
-├── relative_strength_score     ∈ [0, 1]     относительная сила vs сектор/SPY
-├── market_alignment_score      ∈ [0, 1]     согласованность с рынком (SMH, QQQ)
-├── exhaustion_score            ∈ [0, 1]     истощение движения
-├── support_resistance_pressure ∈ [0, 1]     давление уровней S/R
-├── tradeability_score          ∈ [0, 1]     торгуемость (< 0.40 → не входить)
-├── confidence                  ∈ [0, 1]     уверенность сигнала
-├── target_snapshot             TechnicalSnapshot (TickerData + TickerMetrics)
-└── summary                     list[str]    текстовые комментарии
-```
-
-**TradeBuilder** — веса финальной уверенности:
-
-```
-confidence = 0.50 × tech_conf
-           + 0.30 × news_conf
-           + 0.20 × cal_conf
-           + min(|final_bias|, 1.0) × 0.15   ← agreement bonus
-           × (1 − 0.35 × upcoming_event_risk) ← calendar penalty
-```
-
----
-
-## Новостной пайплайн: уровни
-
-| Уровень | Модуль | Входные данные | Выход | LLM |
-|---------|--------|---------------|-------|-----|
-| 0 | `pipeline/ingest.py` | raw `NewsArticle[]` | дедупл. `NewsArticle[]` | нет |
-| 1 | `pipeline/channels.py` | заголовок + summary | `NewsImpactChannel` | нет |
-| 2 | `pipeline/sentiment.py` | текст статьи | `cheap_sentiment` ∈ [−1,1] | нет |
-| 3 | `pipeline/draft.py` | scored articles | `DraftImpulse` | нет |
-| 4 | `pipeline/gates.py` | `DraftImpulse` + `GateContext` | `LLMMode` | нет |
+| Ур. | Модуль | Вход | Выход | LLM |
+|-----|--------|------|-------|-----|
+| 0 | `pipeline/ingest.py` | `NewsArticle[]` (несколько источников) | дедупл. `NewsArticle[]` | — |
+| 1 | `pipeline/channels.py` | заголовок + summary | `NewsImpactChannel` | — |
+| 2 | `pipeline/sentiment.py` | текст статьи | `cheap_sentiment` | — |
+| 3 | `pipeline/draft.py` | оценённые статьи | `DraftImpulse` | — |
+| 4 | `pipeline/gates.py` | `DraftImpulse` + `GateContext` | `LLMMode` | — |
 | 5 | `pipeline/news_signal_runner.py` | отобранные статьи | `AggregatedNewsSignal` | **да** |
 
-### Уровень 2 — `cheap_sentiment`: логика приоритета
+### Уровень 2 — логика `cheap_sentiment`
 
 ```
-raw_sentiment (с API)   ← первый приоритет
-        ↓ нет
-FinBERT (локально)      ← transformers, кэш по hash(text)
-        ↓
-price_pattern_boost     ← floor: "Jumped 15%" → +0.8 даже при нейтральном FinBERT
+1. raw_sentiment (от API, Marketaux и др.)  ← приоритет, clip(−1, 1)
+         ↓ нет
+2. FinBERT (ProsusAI/finbert, локально)    ← TTL-кэш по hash(text)
+         ↓
+3. price_pattern_boost                     ← floor поверх FinBERT:
+   "Jumped 15%" → +0.8  (FinBERT дал 0.0 из-за вопроса в конце — берём буст)
+   "Sinks 7%"  → −0.6
 ```
 
-**Масштаб `price_pattern_boost`:**
-
-| Движение | Сигнал |
-|----------|--------|
+| Движение | boost |
+|----------|-------|
 | ≥ 20% | ±1.0 |
 | ≥ 10% | ±0.8 |
-| ≥ 5%  | ±0.6 |
-| ≥ 2%  | ±0.4 |
+| ≥  5% | ±0.6 |
+| ≥  2% | ±0.4 |
 | < 2%  | ±0.2 |
 
-### Уровень 4 — Гейт: порядок приоритетов
+### Уровень 4 — порядок ветвей гейта
 
 ```
-1. calendar_high_soon         → FULL  (HIGH событие в ближайшие N минут)
-2. regime + confidence ≥ T2   → FULL  (REGIME c уверенностью выше T2)
-3. |bias| ≥ T1 × 2            → FULL  (сильный сигнал — приоритет над кол-вом статей)
-4. |bias| < T1, no REGIME     → SKIP  (спокойный фон)
-5. article_count > N          → LITE  (много статей — lite-дайджест)
-6. иначе                      → LITE
+1. calendar_high_soon          → FULL  (HIGH-событие скоро)
+2. regime_present AND ≥ T2     → FULL  (геополитика / санкции)
+3. |bias| ≥ T1 × 2             → FULL  (сильный сигнал, приоритет над счётчиком)
+4. |bias| < T1, no REGIME      → SKIP  (спокойный фон, LLM не нужен)
+5. article_count > N           → LITE  (много статей — lite-дайджест)
+6. иначе                       → LITE
 ```
 
 ---
 
 ## Профили ThresholdConfig
 
-| Профиль | T1 | T1×2 (FULL) | N | Для |
-|---------|-----|------------|---|-----|
+Два готовых профиля, откалиброванных на реальных данных Yahoo (2026-04-06):
+
+| Профиль | T1 | T1×2 (→FULL) | N | Для тикеров |
+|---------|----|-------------|---|-------------|
 | `PROFILE_GAME5M` | **0.12** | 0.24 | **8** | SNDK, NBIS, MU, LITE, CIEN, ASML |
-| `PROFILE_CONTEXT` | **0.20** | 0.40 | **15** | MSFT, META, AMZN, NVDA (фон) |
+| `PROFILE_CONTEXT` | **0.20** | 0.40 | **15** | MSFT, META, AMZN, NVDA |
+
+У GAME_5M тикеров **3–9 статей/день** (у крупных 40–50) — каждая статья весит больше, поэтому T1 ниже.
 
 ```python
-from pipeline import PROFILE_GAME5M, PROFILE_CONTEXT, decide_llm_mode
-mode = decide_llm_mode(PROFILE_GAME5M, gate_context)
+from pipeline import PROFILE_GAME5M, decide_llm_mode, build_gate_context
+
+ctx = build_gate_context(
+    draft_bias=d.draft_bias_incremental,
+    regime_present=d.regime_stress > PROFILE_GAME5M.regime_stress_min,
+    regime_rule_confidence=0.85 if d.regime_stress > 0.05 else 0.0,
+    calendar_events=calendar_events,
+    article_count=len(articles),
+)
+mode = decide_llm_mode(PROFILE_GAME5M, ctx)  # LLMMode.SKIP | LITE | FULL
 ```
 
-Обоснование: у GAME_5M тикеров **3–9 статей/день** (vs 40–50 у крупных). При малом числе статей каждая весит больше, нижний T1 критичен.
+---
+
+## Использование
+
+```python
+from pipeline import (
+    enrich_cheap_sentiment,
+    scored_from_news_articles,
+    draft_impulse,
+    build_gate_context,
+    decide_llm_mode,
+    run_news_signal_pipeline,
+    PROFILE_GAME5M,
+    LLMMode,
+)
+
+# 1. Получить статьи через sources/
+from sources.news import Source
+from domain import Ticker
+articles = Source(max_per_ticker=50, lookback_hours=24).get_articles([Ticker.SNDK])
+
+# 2. Уровни 2–3: сентимент и черновой импульс
+articles = enrich_cheap_sentiment(articles)
+scored   = scored_from_news_articles(articles)
+impulse  = draft_impulse(scored)
+
+# 3. Уровень 4: гейт
+ctx  = build_gate_context(
+    draft_bias=impulse.draft_bias_incremental,
+    regime_present=impulse.regime_stress > PROFILE_GAME5M.regime_stress_min,
+    regime_rule_confidence=0.85 if impulse.regime_stress > 0.05 else 0.0,
+    calendar_events=[],          # CalendarEvent[] из sources/ecalendar при необходимости
+    article_count=len(articles),
+)
+mode = decide_llm_mode(PROFILE_GAME5M, ctx)
+
+# 4. Уровень 5: LLM (только если нужен)
+if mode != LLMMode.SKIP:
+    signal = run_news_signal_pipeline(articles, cfg=PROFILE_GAME5M)
+    print(f"bias={signal.bias:.3f}  confidence={signal.confidence:.3f}")
+    # AggregatedNewsSignal(bias, confidence, summary, items)
+```
 
 ---
 
@@ -224,54 +197,54 @@ mode = decide_llm_mode(PROFILE_GAME5M, gate_context)
 ```
 nyse/
 ├── README.md
-├── domain.py                   # Ticker, NewsArticle, NewsSignal, AggregatedNewsSignal, Trade…
-├── config_loader.py            # OPENAI_*, NYSE_*, из config.env
+├── domain.py            # Ticker, NewsArticle, NewsSignal, AggregatedNewsSignal…
+├── config_loader.py     # OPENAI_*, NYSE_* из config.env
 ├── config.env.example
 ├── pyproject.toml
 │
-├── pipeline/                   # Новостной пайплайн (уровни 0–5)
-│   ├── types.py                # DraftImpulse, GateContext, LLMMode, ThresholdConfig, PROFILE_*
-│   ├── ingest.py               # Ур. 0: слияние, дедуп
-│   ├── channels.py             # Ур. 1: NewsImpactChannel
-│   ├── sentiment.py            # Ур. 2: cheap_sentiment + price_pattern_boost
-│   ├── draft.py                # Ур. 3: DraftImpulse (экспоненциальное затухание)
-│   ├── calendar_context.py     # этап C: calendar_high_soon → GateContext
-│   ├── gates.py                # Ур. 4: decide_llm_mode
-│   ├── news_cache.py           # этап E: FileCache для статей и draft
-│   ├── llm_client.py           # этап F: OpenAI-compatible HTTP client
-│   ├── llm_cache.py            # этап F: кэш LLM-ответов
-│   ├── llm_digest.py           # этап F: lite-дайджест промпт
-│   ├── news_signal_schema.py   # Ур. 5: Pydantic-схема ответа LLM
-│   ├── llm_batch_plan.py       # Ур. 5: отбор статей для батча
-│   ├── news_signal_aggregator.py # Ур. 5: NewsSignal[] → AggregatedNewsSignal
-│   ├── news_signal_prompt.py   # Ур. 5: structured LLM prompt (Kerima-стиль)
-│   ├── news_signal_runner.py   # Ур. 5: оркестратор run_news_signal_pipeline
-│   └── cache.py                # FileCache (базовый)
+├── pipeline/
+│   ├── cache.py                  # FileCache: JSON-файлы, TTL, без БД
+│   ├── types.py                  # DraftImpulse, ThresholdConfig, PROFILE_GAME5M/CONTEXT
+│   ├── ingest.py                 # Ур. 0: слияние + дедуп
+│   ├── channels.py               # Ур. 1: NewsImpactChannel
+│   ├── sentiment.py              # Ур. 2: cheap_sentiment + price_pattern_boost
+│   ├── draft.py                  # Ур. 3: DraftImpulse
+│   ├── calendar_context.py       # CalendarEvent HIGH → GateContext
+│   ├── gates.py                  # Ур. 4: decide_llm_mode
+│   ├── news_cache.py             # FileCache для статей и draft_impulse
+│   ├── llm_client.py             # OpenAI-compatible HTTP client
+│   ├── llm_cache.py              # кэш LLM-ответов (FileCache)
+│   ├── llm_digest.py             # lite-дайджест промпт
+│   ├── news_signal_schema.py     # Pydantic-схема JSON-ответа LLM
+│   ├── llm_batch_plan.py         # отбор статей для батча
+│   ├── news_signal_aggregator.py # NewsSignal[] → AggregatedNewsSignal
+│   ├── news_signal_prompt.py     # structured LLM prompt
+│   └── news_signal_runner.py     # Ур. 5: оркестратор
 │
-├── sources/                    # Источники рыночных данных
-│   ├── news.py                 # Yahoo (yfinance)
-│   ├── news_newsapi.py         # NewsAPI v2
-│   ├── news_marketaux.py       # Marketaux v1
-│   ├── news_alphavantage.py    # Alpha Vantage NEWS_SENTIMENT
-│   ├── news_rss.py             # RSS/Atom
-│   ├── candles.py              # OHLCV (yfinance)
-│   ├── metrics.py              # Finviz (RSI, ATR, …)
-│   ├── earnings.py             # Даты отчётности
-│   └── ecalendar.py            # Macro-calendar (Investing.com JSON)
+├── sources/
+│   ├── news.py              # Yahoo (yfinance)
+│   ├── news_newsapi.py      # NewsAPI v2
+│   ├── news_marketaux.py    # Marketaux v1
+│   ├── news_alphavantage.py # Alpha Vantage NEWS_SENTIMENT
+│   ├── news_rss.py          # RSS/Atom
+│   ├── candles.py           # OHLCV (yfinance)
+│   ├── metrics.py           # Finviz (RSI, ATR…)
+│   ├── earnings.py          # Даты отчётности
+│   └── ecalendar.py         # Macro-calendar (Investing.com JSON)
 │
 ├── scripts/
-│   └── calibrate_gate.py       # Калибровка T1/T2/N на реальных данных
+│   └── calibrate_gate.py    # офлайн-калибровка T1/T2/N
 │
 ├── tests/
-│   ├── unit/                   # 140 тестов, без сети
-│   └── integration/            # smoke-тесты (pytest.skip без сети)
+│   ├── unit/                # 140 тестов, без сети
+│   └── integration/         # smoke (pytest.skip без сети / ключей)
 │
 └── docs/
-    ├── architecture.md         # Структура пакета sources
-    ├── dataflow.md             # Mermaid-схемы потоков данных
-    ├── calibration.md          # Журнал калибровки T1/T2/N (4 прогона)
-    ├── news_pipeline_hierarchy.md  # Уровни 0–6, пороги
-    ├── news_sources_testing_and_pipeline_roadmap.md  # Дорожная карта A–G
+    ├── calibration.md                        # журнал 4 прогонов T1/T2/N
+    ├── news_pipeline_hierarchy.md            # уровни 0–6, пороги
+    ├── dataflow.md                           # Mermaid-схемы
+    ├── architecture.md                       # структура sources/
+    ├── news_sources_testing_and_pipeline_roadmap.md
     ├── configuration.md
     ├── testing_telegram_plan.md
     ├── news_cache_and_impulse_proposals.md
@@ -282,11 +255,9 @@ nyse/
 
 ## Конфигурация
 
-Ключевые переменные в `config.env`:
-
 | Переменная | Назначение | Дефолт |
 |------------|-----------|--------|
-| `OPENAI_BASE_URL` | Эндпоинт LLM API | — |
+| `OPENAI_BASE_URL` | Эндпоинт LLM | — |
 | `OPENAI_API_KEY` | API-ключ | — |
 | `OPENAI_MODEL` | Модель | `gpt-4o` |
 | `NYSE_SENTIMENT_LOCAL` | Включить FinBERT | `true` |
@@ -303,15 +274,12 @@ nyse/
 ## Калибровка гейта
 
 ```bash
-# профиль GAME_5M (интрадей тикеры)
 python scripts/calibrate_gate.py --profile game5m \
     --tickers SNDK NBIS MU LITE CIEN ASML --days 1
 
-# профиль CONTEXT (крупные тикеры, фон)
 python scripts/calibrate_gate.py --profile context \
     --tickers MSFT META AMZN NVDA --days 3
 
-# ручные пороги
 python scripts/calibrate_gate.py --t1 0.15 --max-n 10 --tickers SNDK MU --days 7
 ```
 
@@ -319,42 +287,12 @@ python scripts/calibrate_gate.py --t1 0.15 --max-n 10 --tickers SNDK MU --days 7
 
 ---
 
-## Интеграция с pystockinvest / lse
-
-```python
-from pipeline import PROFILE_GAME5M, run_news_signal_pipeline, decide_llm_mode
-from pipeline import enrich_cheap_sentiment, draft_impulse, scored_from_news_articles
-from pipeline import build_gate_context
-
-# 1. Обогатить статьи сентиментом
-articles = enrich_cheap_sentiment(raw_articles)
-
-# 2. Черновой импульс → гейт
-scored = scored_from_news_articles(articles)
-d = draft_impulse(scored)
-ctx = build_gate_context(
-    draft_bias=d.draft_bias_incremental,
-    regime_present=d.regime_stress > PROFILE_GAME5M.regime_stress_min,
-    regime_rule_confidence=0.85 if d.regime_stress > 0.05 else 0.0,
-    calendar_events=calendar_events,
-    article_count=len(articles),
-)
-
-# 3. Уровень 5 (если нужен LLM)
-from pipeline.types import LLMMode
-if decide_llm_mode(PROFILE_GAME5M, ctx) != LLMMode.SKIP:
-    signal = run_news_signal_pipeline(articles, cfg=PROFILE_GAME5M)
-    # signal: AggregatedNewsSignal(bias, confidence, summary, items)
-```
-
----
-
 ## Дорожная карта
 
 | Этап | Статус | Содержание |
 |------|--------|-----------|
-| A–G | ✅ закрыто | Источники, pipeline 0–5, LLM-гейт, калибровка |
-| **Уровень 6** | 🔜 следующий | Подключить `AggregatedNewsSignal` к агенту GAME_5M |
-| G+ | ♻ ongoing | Калибровка на неделях с реальными движениями цены |
+| A–G | ✅ | Источники, pipeline уровни 0–5, LLM-гейт, калибровка |
+| Уровень 6 | 🔜 | Слияние `AggregatedNewsSignal` с техническим сигналом |
+| G+ | ♻ | Калибровка на реальных ценовых движениях |
 
 Детали — `docs/news_sources_testing_and_pipeline_roadmap.md`.
