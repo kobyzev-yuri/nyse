@@ -11,7 +11,10 @@ nyse/
 │   ├── architecture.md   ← этот файл
 │   ├── dataflow.md       ← схемы «было → стало» (Mermaid)
 │   ├── news_calendar_inventory.md  ← инвентаризация новостей/календаря, Marketaux, типизация
-│   └── testing_telegram_plan.md    ← план тестов (новости — фокус), stub техники, Telegram
+│   ├── testing_telegram_plan.md    ← план тестов (новости — фокус), stub техники, Telegram
+│   ├── news_cache_and_impulse_proposals.md  ← кэш без БД, свежесть, макро, методы импульса
+│   └── news_pipeline_hierarchy.md   ← §5.4 + FinBERT + Kerima LLM + пороги и кэш
+├── pipeline/           # каналы §5.4, черновой импульс, гейты LLM, FileCache (без LLM)
 └── sources/
     ├── __init__.py       # публичный API: *Source + символы; добавляет корень в sys.path
     ├── symbols.py        # yfinance_symbol, finviz_symbol, tickers_from_environ

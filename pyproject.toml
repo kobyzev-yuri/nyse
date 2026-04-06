@@ -9,7 +9,15 @@ description = "US market data sources (candles, calendar, news, metrics)"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
-include = ["sources*"]
+include = ["sources*", "pipeline*"]
 
 [tool.setuptools]
 py-modules = ["domain"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
