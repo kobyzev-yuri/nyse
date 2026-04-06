@@ -42,7 +42,8 @@
 conda activate py11
 cd /path/to/nyse
 pip install -e ".[dev]"
-# dev включает pytest, yfinance, pandas — нужны для integration и sources
+# Базовые зависимости (yfinance, pandas, requests, pytz, finvizfinance) ставятся через `pip install -e .`
+# `[dev]` добавляет только pytest
 python -m pytest tests/unit/ -q
 ```
 

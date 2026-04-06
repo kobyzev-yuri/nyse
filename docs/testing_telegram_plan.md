@@ -9,6 +9,7 @@
 ```bash
 conda activate py11
 cd /path/to/nyse
+pip install -e .
 pip install -e ".[dev]"
 python -m pytest tests/
 ```
