@@ -253,6 +253,93 @@ nyse/
 
 ---
 
+## FileCache — хранилище без БД
+
+Весь кэш пакета — обычные JSON-файлы на диске. Ни PostgreSQL, ни Redis не нужны.
+
+### Устройство
+
+```
+.cache/nyse/                       ← NYSE_CACHE_ROOT (по умолчанию)
+├── 3f8a1c…d4.json                 ← один файл = один ключ
+├── 9b2e7f…a1.json
+└── …
+
+Каждый файл:
+{
+    "value":       <любой JSON-сериализуемый объект>,
+    "_expires_at": 1712345678.0    ← unix timestamp; при чтении: просрочен → удалить
+}
+```
+
+Имя файла = `sha256(ключ).json`. TTL проверяется лениво при первом чтении.
+
+### Три независимых слоя
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  FileCache   (pipeline/cache.py)                                │
+│  root=NYSE_CACHE_ROOT   ключ → sha256 → .json с TTL            │
+└──────────────┬──────────────────┬──────────────────┬───────────┘
+               │                  │                  │
+  ┌────────────▼────────┐ ┌───────▼──────────┐ ┌────▼──────────────┐
+  │  Новости + Draft    │ │  Сентимент       │ │  LLM-ответы       │
+  │  news_cache.py      │ │  sentiment.py    │ │  llm_cache.py     │
+  │                     │ │                  │ │                   │
+  │  Ключ:              │ │  Ключ:           │ │  Ключ:            │
+  │  raw|v1|            │ │  cheap_sentiment │ │  llm|v1|          │
+  │    provider|        │ │    |sha256(       │ │    prompt_ver|    │
+  │    ticker|extra     │ │    model+text)   │ │    model|         │
+  │  draft|v1|          │ │                  │ │    sha256(msgs)   │
+  │    ticker|w…|h…     │ │  Значение:       │ │                   │
+  │                     │ │  float [−1, 1]   │ │  Значение:        │
+  │  Значение:          │ │                  │ │  str (raw JSON    │
+  │  NewsArticle[] JSON │ │  TTL: env        │ │  из LLM)          │
+  │  DraftImpulse dict  │ │  NYSE_SENTIMENT_ │ │                   │
+  │                     │ │  CACHE_TTL_SEC   │ │  TTL: env         │
+  │  TTL: env           │ │  (def: 86400)    │ │  NYSE_LLM_CACHE_  │
+  │  NYSE_NEWS_RAW_     │ │                  │ │  TTL_SEC          │
+  │  TTL_SEC (def: 900) │ └──────────────────┘ │  (def: 3600)      │
+  └─────────────────────┘                      └───────────────────┘
+```
+
+### Жизненный цикл ключа
+
+```
+get(key)
+  ├── файл не найден          → None  (промах)
+  ├── _expires_at < now()     → unlink() + None  (истёк, удалён)
+  └── ОК                      → value  (попадание)
+
+set(key, value, ttl_sec)
+  └── записать {value, _expires_at=now()+ttl}  → sha256(key).json
+```
+
+### Готовые фабрики
+
+```python
+from pipeline.news_cache import default_news_file_cache   # TTL=NYSE_NEWS_RAW_TTL_SEC
+from pipeline.llm_cache  import default_llm_file_cache    # TTL=NYSE_LLM_CACHE_TTL_SEC
+from pipeline.sentiment  import enrich_with_default_cache # создаёт кэш внутри
+
+# или напрямую
+from pipeline import FileCache
+cache = FileCache(root=Path(".cache/myapp"), default_ttl_sec=3600)
+cache.set("my_key", {"data": 42})
+val = cache.get("my_key")  # {"data": 42}  или None если истёк
+```
+
+### TTL по умолчанию
+
+| Слой | env-переменная | Дефолт |
+|------|---------------|--------|
+| Сырые новости (`raw|…`) | `NYSE_NEWS_RAW_TTL_SEC` | 900 с (15 мин) |
+| Сентимент (`cheap_sentiment|…`) | `NYSE_SENTIMENT_CACHE_TTL_SEC` | 86400 с (24 ч) |
+| LLM-ответы (`llm|…`) | `NYSE_LLM_CACHE_TTL_SEC` | 3600 с (1 ч) |
+| DraftImpulse (`draft|…`) | `NYSE_NEWS_AGGREGATE_TTL_SEC` | 300 с (5 мин) |
+
+---
+
 ## Конфигурация
 
 | Переменная | Назначение | Дефолт |
