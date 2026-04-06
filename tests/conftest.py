@@ -1,6 +1,10 @@
 """
 Общая конфигурация pytest: корень репозитория в sys.path для `import pipeline` и `import domain`.
 Все модули тестов в `tests/unit/` используют эти фикстуры.
+
+Конфигурация секретов (LLM, ProxyAPI): в обычных юнит-тестах не используется.
+См. docs/configuration.md и `config_loader.py`. Для опциональных интеграционных тестов —
+фикстура `load_nyse_config` (подгружает config.env по NYSE_CONFIG_PATH или config.env).
 """
 
 from __future__ import annotations
@@ -38,3 +42,12 @@ def default_thresholds():
     from pipeline import ThresholdConfig
 
     return ThresholdConfig()
+
+
+@pytest.fixture
+def load_nyse_config():
+    """Опционально: подмешать переменные из config.env (для integration-тестов с LLM)."""
+    import config_loader
+
+    config_loader.load_config_env()
+    return True

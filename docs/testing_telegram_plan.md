@@ -21,6 +21,8 @@ conda run -n py11 python -m pytest tests/ -q
 
 В репозитории есть скрипт **`scripts/run_tests.sh`** (обёртка над `conda run -n py11`).
 
+Секреты LLM (ProxyAPI, те же ключи что в `lse/config.env`): см. **`docs/configuration.md`** и **`config_loader.py`**. В юнит-тестах конфиг не подгружается; для интеграции с LLM — фикстура `load_nyse_config` в `tests/conftest.py`.
+
 ---
 
 ## 1. Роли и границы

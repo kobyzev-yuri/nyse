@@ -7,11 +7,14 @@
 ```
 nyse/
 ├── domain.py             # enum Ticker, датаклассы домена (общая модель)
+├── config_loader.py      # OPENAI_* из config.env / NYSE_CONFIG_PATH / ../lse/config.env
+├── config.env.example    # шаблон; config.env в .gitignore
 ├── scripts/
 │   └── run_tests.sh    # pytest через conda env py11
 ├── docs/
 │   ├── architecture.md   ← этот файл
 │   ├── dataflow.md       ← схемы «было → стало» (Mermaid)
+│   ├── configuration.md  # секреты, ProxyAPI, поведение в тестах
 │   ├── news_calendar_inventory.md  ← инвентаризация новостей/календаря, Marketaux, типизация
 │   ├── testing_telegram_plan.md    ← план тестов (новости — фокус), stub техники, Telegram
 │   ├── news_cache_and_impulse_proposals.md  ← кэш без БД, свежесть, макро, методы импульса

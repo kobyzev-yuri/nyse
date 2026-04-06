@@ -1,0 +1,15 @@
+# Локальные секреты (как в lse: копия с config.env.example)
+config.env
+.env
+.env.local
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+*.swp
+.*.swp
