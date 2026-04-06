@@ -2,6 +2,25 @@
 
 Цель: **отладка новостного контура** и будущих адаптеров **nyse** без обязательной доводки технического входа до уровня ML у Kerima. Технический импульс — **заглушка или упрощённая эвристика**, но **форматы ввода/вывода** совместимы с **pystockinvest** (`domain.Data`, `NewsAgent`, `Orchestrator`, `Trade`), чтобы позже подменить только реализации.
 
+### Окружение: conda `py11`
+
+Тесты и разработка ориентированы на **conda-окружение `py11`** (Python 3.11).
+
+```bash
+conda activate py11
+cd /path/to/nyse
+pip install -e ".[dev]"
+python -m pytest tests/
+```
+
+Без активации:
+
+```bash
+conda run -n py11 python -m pytest tests/ -q
+```
+
+В репозитории есть скрипт **`scripts/run_tests.sh`** (обёртка над `conda run -n py11`).
+
 ---
 
 ## 1. Роли и границы

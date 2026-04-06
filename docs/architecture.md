@@ -7,6 +7,8 @@
 ```
 nyse/
 ├── domain.py             # enum Ticker, датаклассы домена (общая модель)
+├── scripts/
+│   └── run_tests.sh    # pytest через conda env py11
 ├── docs/
 │   ├── architecture.md   ← этот файл
 │   ├── dataflow.md       ← схемы «было → стало» (Mermaid)
