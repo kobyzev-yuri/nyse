@@ -171,3 +171,74 @@ def llm_cache_ttl_sec() -> int:
     """TTL ответов LLM (даджест / completion) в файловом кэше (этап F)."""
     load_config_env()
     return int(float(os.environ.get("NYSE_LLM_CACHE_TTL_SEC") or "86400"))
+
+
+# ============================================
+# Tickers
+# ============================================
+
+_GAME5M_DEFAULT = "SNDK,NBIS,ASML,MU,LITE,CIEN"
+_GAME5M_CONTEXT_DEFAULT = "QQQ,SMH"
+
+
+def _parse_ticker_list(raw: str) -> list:
+    """Парсит строку вида 'SNDK,NBIS,MU' → List[Ticker], пропуская неизвестные."""
+    from domain import Ticker
+
+    result = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            result.append(Ticker(part))
+        except ValueError:
+            try:
+                result.append(Ticker[part])
+            except KeyError:
+                pass  # неизвестный тикер (^VIX, CL=F и т.п.) — пропускаем
+    return result
+
+
+def get_game5m_tickers() -> list:
+    """
+    Торговые тикеры GAME_5M из ``TICKERS_FAST`` в config.env.
+
+    Используется во всех тестах и сигнальном цикле как приоритетный набор.
+    Fallback: ``SNDK,NBIS,ASML,MU,LITE,CIEN``.
+    """
+    load_config_env()
+    raw = (os.environ.get("TICKERS_FAST") or _GAME5M_DEFAULT).strip()
+    return _parse_ticker_list(raw)
+
+
+def get_game5m_context_tickers() -> list:
+    """
+    Контекстные тикеры для market_alignment (QQQ, SMH по умолчанию).
+    """
+    return _parse_ticker_list(_GAME5M_CONTEXT_DEFAULT)
+
+
+# ============================================
+# Telegram
+# ============================================
+
+def get_telegram_bot_token() -> Optional[str]:
+    """Токен Telegram-бота (TELEGRAM_BOT_TOKEN); None, если не задан."""
+    load_config_env()
+    k = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    return k or None
+
+
+def get_telegram_chat_id() -> Optional[str]:
+    """
+    Чат для сигналов.
+    Берём первое значение из TELEGRAM_SIGNAL_CHAT_IDS или TELEGRAM_SIGNAL_CHAT_ID.
+    None, если ни одно не задано.
+    """
+    load_config_env()
+    ids = (os.environ.get("TELEGRAM_SIGNAL_CHAT_IDS") or "").strip()
+    if ids:
+        return ids.split(",")[0].strip() or None
+    single = (os.environ.get("TELEGRAM_SIGNAL_CHAT_ID") or "").strip()
+    return single or None

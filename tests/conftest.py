@@ -2,13 +2,15 @@
 Общая конфигурация pytest: корень репозитория в sys.path для `import pipeline` и `import domain`.
 Все модули тестов в `tests/unit/` используют эти фикстуры.
 
-Конфигурация секретов (LLM, ProxyAPI): в обычных юнит-тестах не используется.
+Конфигурация секретов (LLM, ProxyAPI, Telegram): в обычных юнит-тестах не используется.
 См. docs/configuration.md и `config_loader.py`.
 
 Фикстуры:
 - `load_nyse_config` — подмешать `config.env` / `NYSE_CONFIG_PATH` / `../lse/config.env`.
 - `require_openai_settings` — `load_nyse_config` + skip, если нет `OPENAI_API_KEY`.
-- `require_newsapi_key` / `require_marketaux_key` / `require_alphavantage_key` — skip без ключей в config.env.
+- `require_newsapi_key` / `require_marketaux_key` / `require_alphavantage_key` — skip без ключей.
+- `require_telegram_token` — TELEGRAM_BOT_TOKEN из config.env или skip.
+- `require_telegram_settings` — токен + chat_id или skip.
 """
 
 from __future__ import annotations
@@ -96,3 +98,70 @@ def require_alphavantage_key(load_nyse_config):
     if not k:
         pytest.skip("Нет ALPHAVANTAGE_KEY в config.env")
     return k
+
+
+@pytest.fixture(scope="session")
+def game5m_tickers(tmp_path_factory):
+    """
+    Список тикеров GAME_5M из TICKERS_FAST (config.env) или дефолт SNDK,NBIS,ASML,MU,LITE,CIEN.
+
+    Используйте этот фикстур во всех integration-тестах вместо хардкода Ticker.NVDA.
+    """
+    import config_loader
+
+    config_loader.load_config_env()
+    tickers = config_loader.get_game5m_tickers()
+    assert tickers, "get_game5m_tickers() вернул пустой список"
+    return tickers
+
+
+@pytest.fixture(scope="session")
+def game5m_primary(tmp_path_factory):
+    """
+    Первичный тикер GAME_5M для smoke-тестов (первый в TICKERS_FAST, обычно SNDK).
+    """
+    import config_loader
+
+    config_loader.load_config_env()
+    tickers = config_loader.get_game5m_tickers()
+    assert tickers, "get_game5m_tickers() вернул пустой список"
+    return tickers[0]
+
+
+@pytest.fixture
+def require_telegram_token(load_nyse_config):
+    """TELEGRAM_BOT_TOKEN из config.env или skip."""
+    import config_loader
+
+    token = config_loader.get_telegram_bot_token()
+    if not token:
+        pytest.skip(
+            "Нет TELEGRAM_BOT_TOKEN в config.env — "
+            "добавьте: TELEGRAM_BOT_TOKEN=<токен от @BotFather>"
+        )
+    return token
+
+
+@pytest.fixture
+def require_telegram_settings(load_nyse_config):
+    """
+    Токен + chat_id из config.env. Skip, если чего-то не хватает.
+
+    Возвращает (token: str, chat_id: str).
+    Задайте в config.env:
+      TELEGRAM_BOT_TOKEN=...
+      TELEGRAM_SIGNAL_CHAT_ID=...  (или TELEGRAM_SIGNAL_CHAT_IDS=id1,id2)
+    """
+    import config_loader
+
+    token = config_loader.get_telegram_bot_token()
+    if not token:
+        pytest.skip("Нет TELEGRAM_BOT_TOKEN в config.env")
+
+    chat_id = config_loader.get_telegram_chat_id()
+    if not chat_id:
+        pytest.skip(
+            "Нет TELEGRAM_SIGNAL_CHAT_ID / TELEGRAM_SIGNAL_CHAT_IDS в config.env"
+        )
+
+    return token, chat_id
