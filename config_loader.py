@@ -242,3 +242,17 @@ def get_telegram_chat_id() -> Optional[str]:
         return ids.split(",")[0].strip() or None
     single = (os.environ.get("TELEGRAM_SIGNAL_CHAT_ID") or "").strip()
     return single or None
+
+
+def get_telegram_proxy() -> Optional[str]:
+    """
+    Прокси для Telegram-бота (TELEGRAM_PROXY).
+    Поддерживаемые форматы:
+        socks5://user:pass@host:port
+        http://host:port
+        https://host:port
+    None → прямое соединение.
+    """
+    load_config_env()
+    v = (os.environ.get("TELEGRAM_PROXY") or "").strip()
+    return v or None

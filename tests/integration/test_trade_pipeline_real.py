@@ -250,11 +250,17 @@ def test_trade_full_pipeline_with_news(
     print(f"\n[{ticker.value}] articles={len(enriched)}  bias={bias:+.3f}  gate={mode.value}")
 
     news_signal = None
-    if mode.value == "full":
-        llm     = get_chat_model()
-        signals = run_news_signal_pipeline(enriched, llm=llm, ticker=ticker)
-        if signals:
-            news_signal = aggregate_news_signals(signals)
+    if mode.value in ("full", "lite"):
+        llm = get_chat_model()
+        agg = run_news_signal_pipeline(
+            enriched,
+            ticker=ticker.value,
+            cfg=PROFILE_GAME5M,
+            mode=mode,
+            llm=llm,
+        )
+        if agg is not None:
+            news_signal = agg
             print(f"  → AggregatedNewsSignal: bias={news_signal.bias:+.3f}  "
                   f"conf={news_signal.confidence:.2f}  items={len(news_signal.items)}")
     else:
