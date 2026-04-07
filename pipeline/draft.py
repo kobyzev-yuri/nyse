@@ -58,8 +58,8 @@ def draft_impulse(
     for a in articles:
         age = _age_hours(now, a.published_at)
         w = math.exp(-lam * age)
-        # cheap_sentiment может быть None если sentiment ещё не рассчитан — трактуем как 0.0
-        cs = float(a.cheap_sentiment) if a.cheap_sentiment is not None else 0.0
+        # ScoredArticle.cheap_sentiment: float — всегда задан (None→0.0 происходит в scored_from_news_articles)
+        cs = a.cheap_sentiment
         pair = (w, cs)
         if a.channel == NewsImpactChannel.INCREMENTAL:
             inc.append(pair)
@@ -96,7 +96,9 @@ def scored_from_news_articles(
     """
     Уровень 3: ``NewsArticle`` с уже заполненным ``cheap_sentiment`` (после этапа B)
     + классификация канала → ``ScoredArticle`` для ``draft_impulse``.
-    Если ``cheap_sentiment`` ещё None — подставляется 0.0.
+
+    ``NewsArticle.cheap_sentiment`` типизирован как ``Optional[float]``; если None
+    (sentiment ещё не рассчитан) — подставляется 0.0 до передачи в ``ScoredArticle``.
 
     ``seen_regime_titles`` — опциональный разделяемый ``set`` для дедупликации
     macro REGIME-статей в multi-ticker сессиях.  Если title REGIME-статьи уже

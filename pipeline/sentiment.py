@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re as _re
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -24,13 +25,13 @@ from .cache import FileCache
 
 logger = logging.getLogger(__name__)
 
-# pipeline по id модели (как в lse/services/sentiment_analyzer.py)
+# HuggingFace pipeline кешируется по id модели — избегаем повторной загрузки весов
+# (аналогично lse/services/sentiment_analyzer.py).
 _pipelines: dict[str, object] = {}
 
 # ---------------------------------------------------------------------------
-# Паттерны движения цены в заголовке
+# Паттерны движения цены в заголовке (price_pattern_boost)
 # ---------------------------------------------------------------------------
-import re as _re
 
 _PRICE_MOVE_RE = _re.compile(
     r"""
