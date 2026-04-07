@@ -58,18 +58,20 @@ def draft_impulse(
     for a in articles:
         age = _age_hours(now, a.published_at)
         w = math.exp(-lam * age)
-        pair = (w, a.cheap_sentiment)
+        # cheap_sentiment может быть None если sentiment ещё не рассчитан — трактуем как 0.0
+        cs = float(a.cheap_sentiment) if a.cheap_sentiment is not None else 0.0
+        pair = (w, cs)
         if a.channel == NewsImpactChannel.INCREMENTAL:
             inc.append(pair)
             wsum_inc += w
         elif a.channel == NewsImpactChannel.REGIME:
             reg.append(pair)
             wsum_reg += w
-            max_abs_reg = max(max_abs_reg, abs(a.cheap_sentiment))
+            max_abs_reg = max(max_abs_reg, abs(cs))
         else:
             pol.append(pair)
             wsum_pol += w
-            max_abs_pol = max(max_abs_pol, abs(a.cheap_sentiment))
+            max_abs_pol = max(max_abs_pol, abs(cs))
 
     return DraftImpulse(
         draft_bias_incremental=weighted_mean(inc),

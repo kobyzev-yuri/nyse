@@ -13,13 +13,12 @@ def test_pipeline_end_to_end_from_yfinance(load_nyse_config, game5m_primary):
     pytest.importorskip("yfinance")
     from pipeline import (
         GateContext,
-        ScoredArticle,
         ThresholdConfig,
-        classify_channel,
         decide_llm_mode,
         draft_impulse,
         single_scalar_draft_bias,
     )
+    from pipeline.draft import scored_from_news_articles
     from sources.news import Source
 
     ticker = game5m_primary
@@ -27,16 +26,8 @@ def test_pipeline_end_to_end_from_yfinance(load_nyse_config, game5m_primary):
     if not articles:
         pytest.skip(f"Yahoo не вернул новостей для {ticker.value} за 72ч")
 
-    scored = []
-    for a in articles:
-        ch, _ = classify_channel(a.title, a.summary)
-        scored.append(
-            ScoredArticle(
-                published_at=a.timestamp,
-                cheap_sentiment=getattr(a, "cheap_sentiment", 0.0),
-                channel=ch,
-            )
-        )
+    # scored_from_news_articles нормализует cheap_sentiment=None → 0.0
+    scored = scored_from_news_articles(articles)
 
     d = draft_impulse(scored)
     bias = single_scalar_draft_bias(d)
@@ -67,13 +58,12 @@ def test_pipeline_on_all_game5m(load_nyse_config, game5m_tickers):
     pytest.importorskip("yfinance")
     from pipeline import (
         GateContext,
-        ScoredArticle,
         ThresholdConfig,
-        classify_channel,
         decide_llm_mode,
         draft_impulse,
         single_scalar_draft_bias,
     )
+    from pipeline.draft import scored_from_news_articles
     from sources.news import Source
 
     all_articles = Source(max_per_ticker=10, lookback_hours=48).get_articles(game5m_tickers)
@@ -91,14 +81,7 @@ def test_pipeline_on_all_game5m(load_nyse_config, game5m_tickers):
             print(f"  {ticker.value:6s} — нет новостей")
             continue
 
-        scored = [
-            ScoredArticle(
-                published_at=a.timestamp,
-                cheap_sentiment=getattr(a, "cheap_sentiment", 0.0),
-                channel=classify_channel(a.title, a.summary)[0],
-            )
-            for a in arts
-        ]
+        scored = scored_from_news_articles(arts)
         d = draft_impulse(scored)
         bias = single_scalar_draft_bias(d)
         mode = decide_llm_mode(
