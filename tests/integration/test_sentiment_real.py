@@ -178,24 +178,29 @@ def test_finbert_cache_avoids_second_load(require_finbert, tmp_path):
 def test_llm_signal_on_real_game5m_news(require_openai_settings, require_finbert,
                                          game5m_primary, tmp_path):
     """
-    Полный pipeline Level 0–5 на реальных данных:
-      Yahoo News → FinBERT enrich → draft → gate → LLM (если FULL) → AggregatedNewsSignal
+    Полный pipeline Level 0–5 на реальных данных GAME_5M:
+      Yahoo News → FinBERT enrich → draft → gate (PROFILE_GAME5M) → LLM → AggregatedNewsSignal
 
-    Если gate=SKIP/LITE: тест проходит, показывает что LLM не нужен для текущих новостей.
+    Использует PROFILE_GAME5M (t1=0.12, t1×2=0.24):
+      bias > 0.24  → FULL  → вызов gpt-5.4-mini
+      bias > 0.12  → LITE  → дайджест (LLM не для structured signal)
+      bias < 0.12  → SKIP
+
+    Если gate=SKIP/LITE: тест проходит (нет сильного новостного сигнала сейчас).
     Если gate=FULL: запускает реальный gpt-5.4-mini, проверяет структуру ответа.
 
-    KERIM_REPLACE: после интеграции NyseNewsAgent-обёртки — этот тест
-    переиспользуется напрямую с agent.predict().
+    KERIM_REPLACE: после интеграции NyseNewsAgent — этот тест переиспользуется с agent.predict().
     """
     pytest.importorskip("yfinance")
     from pipeline import (
-        GateContext, LLMMode, ThresholdConfig, decide_llm_mode,
+        GateContext, LLMMode, decide_llm_mode,
         draft_impulse, single_scalar_draft_bias,
     )
     from pipeline.cache import FileCache
     from pipeline.draft import scored_from_news_articles
     from pipeline.news_signal_runner import run_news_signal_pipeline
     from pipeline.sentiment import enrich_cheap_sentiment
+    from pipeline.types import PROFILE_GAME5M
     from sources.news import Source
 
     ticker = game5m_primary
@@ -215,34 +220,36 @@ def test_llm_signal_on_real_game5m_news(require_openai_settings, require_finbert
     d = draft_impulse(scored)
     bias = single_scalar_draft_bias(d)
 
-    # Level 4: gate
+    # Level 4: gate — PROFILE_GAME5M для интрадей тикеров (t1=0.12, FULL при bias > 0.24)
+    cfg = PROFILE_GAME5M
     mode = decide_llm_mode(
-        ThresholdConfig(),
+        cfg,
         GateContext(
             draft_bias=bias,
-            regime_present=d.regime_stress > 0.01,
-            regime_rule_confidence=0.85 if d.regime_stress > 0.01 else 0.0,
+            regime_present=d.regime_stress > cfg.regime_stress_min,
+            regime_rule_confidence=0.85 if d.regime_stress > cfg.regime_stress_min else 0.0,
             calendar_high_soon=False,
             article_count=len(articles),
         ),
     )
 
     print(
-        f"\n[{ticker.value}] articles={len(articles)}  "
-        f"FinBERT bias={bias:.3f}  gate={mode.value}"
+        f"\n[{ticker.value}] articles={len(articles)}  FinBERT bias={bias:.3f}  "
+        f"gate={mode.value}  "
+        f"(PROFILE_GAME5M: t1={cfg.t1_abs_draft_bias}, full_at={cfg.t1_abs_draft_bias * 2:.2f})"
     )
 
     if mode != LLMMode.FULL:
-        print(f"  → gate={mode.value}: LLM не нужен для текущего новостного потока")
+        print(f"  → gate={mode.value}: LLM не нужен (bias={bias:.3f} < {cfg.t1_abs_draft_bias * 2:.2f})")
         assert mode.value in ("skip", "lite")
         return
 
-    # Level 5: LLM
+    # Level 5: LLM (gpt-5.4-mini)
     try:
         result = run_news_signal_pipeline(
             articles,
             ticker.value,
-            cfg=ThresholdConfig(),
+            cfg=cfg,
             mode=mode,
             cache=FileCache(tmp_path),
             settings=require_openai_settings,
@@ -257,7 +264,7 @@ def test_llm_signal_on_real_game5m_news(require_openai_settings, require_finbert
     assert 0.0 <= result.confidence <= 1.0
     assert len(result.items) > 0
     print(
-        f"  → LLM: bias={result.bias:.3f}  conf={result.confidence:.3f}  "
+        f"  → LLM (gpt-5.4-mini): bias={result.bias:.3f}  conf={result.confidence:.3f}  "
         f"items={len(result.items)}"
     )
     for line in result.summary:
@@ -267,13 +274,15 @@ def test_llm_signal_on_real_game5m_news(require_openai_settings, require_finbert
 @pytest.mark.integration
 def test_llm_signal_without_finbert(require_openai_settings, game5m_primary, tmp_path):
     """
-    Level 5 без FinBERT: cheap_sentiment=None → 0.0 в draft.
-    Gate обычно SKIP (нет сигнала) — показывает что LLM-путь требует FinBERT для активации.
+    Демонстрирует НЕОБХОДИМОСТЬ FinBERT:
+      без enrich → cheap_sentiment=0.0 → bias=0.0 → gate=SKIP → LLM не вызывается.
+
+    Этот тест подтверждает что Level 2 (FinBERT) является prerequisite для Level 4/5.
     """
     pytest.importorskip("yfinance")
-    from pipeline import GateContext, ThresholdConfig, decide_llm_mode
+    from pipeline import GateContext, decide_llm_mode, draft_impulse, single_scalar_draft_bias
     from pipeline.draft import scored_from_news_articles
-    from pipeline import draft_impulse, single_scalar_draft_bias
+    from pipeline.types import PROFILE_GAME5M
     from sources.news import Source
 
     ticker = game5m_primary
@@ -281,17 +290,18 @@ def test_llm_signal_without_finbert(require_openai_settings, game5m_primary, tmp
     if not articles:
         pytest.skip(f"Yahoo не вернул новостей для {ticker.value}")
 
-    # БЕЗ enrich — cheap_sentiment=None → scored_from_news_articles даст 0.0
+    # БЕЗ enrich_cheap_sentiment — cheap_sentiment=None → scored даёт 0.0
     scored = scored_from_news_articles(articles)
     d = draft_impulse(scored)
     bias = single_scalar_draft_bias(d)
 
+    cfg = PROFILE_GAME5M
     mode = decide_llm_mode(
-        ThresholdConfig(),
+        cfg,
         GateContext(
             draft_bias=bias,
-            regime_present=d.regime_stress > 0.01,
-            regime_rule_confidence=0.85 if d.regime_stress > 0.01 else 0.0,
+            regime_present=d.regime_stress > cfg.regime_stress_min,
+            regime_rule_confidence=0.85 if d.regime_stress > cfg.regime_stress_min else 0.0,
             calendar_high_soon=False,
             article_count=len(articles),
         ),
@@ -301,9 +311,7 @@ def test_llm_signal_without_finbert(require_openai_settings, game5m_primary, tmp
         f"\n[{ticker.value}] без FinBERT: articles={len(articles)}  "
         f"bias={bias:.3f}  gate={mode.value}"
     )
-    # Без FinBERT bias=0.0 → gate почти всегда SKIP
-    assert mode.value in ("skip", "lite", "full")
-    print(
-        f"  → Без FinBERT gate={mode.value} "
-        f"(ожидаем skip — нет сентимента для активации LLM)"
-    )
+    print(f"  → FinBERT обязателен: без него bias=0 → gate=skip → LLM не активируется")
+    # Без FinBERT bias всегда 0.0 → всегда SKIP
+    assert mode.value == "skip", \
+        f"Ожидали skip без FinBERT, но получили {mode.value} (bias={bias:.3f})"
