@@ -1,7 +1,10 @@
 """
 Интеграция: run_news_signal_pipeline → реальный API → AggregatedNewsSignal.
 
-Нужен OPENAI_API_KEY. Без сети → pytest.skip.
+Нужен OPENAI_API_KEY + сеть. Без них → pytest.skip.
+
+Паттерн: НЕ передаём ``llm=`` вручную — runner сам строит ChatOpenAI через
+``get_chat_model(settings)`` (как pystockinvest делает в cmd/telegram_bot.py).
 """
 
 from __future__ import annotations
@@ -9,7 +12,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-import requests
 
 from domain import NewsArticle, Ticker
 from pipeline import LLMMode, ThresholdConfig
@@ -50,8 +52,12 @@ def test_news_signal_pipeline_smoke(require_openai_settings, tmp_path):
             cache=FileCache(tmp_path),
             settings=require_openai_settings,
         )
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-        pytest.skip(f"Сеть до API недоступна: {type(e).__name__}")
+    except Exception as exc:
+        # Пропускаем при любой сетевой / авторизационной ошибке LangChain/httpx
+        exc_name = type(exc).__name__
+        if any(kw in exc_name for kw in ("Connection", "Timeout", "Auth", "API", "HTTP")):
+            pytest.skip(f"API/сеть недоступна: {exc_name}: {exc}")
+        raise
 
     assert -1.0 <= result.bias <= 1.0
     assert 0.0 <= result.confidence <= 1.0
@@ -59,3 +65,86 @@ def test_news_signal_pipeline_smoke(require_openai_settings, tmp_path):
     assert len(result.summary) >= 1
     print(f"\nbias={result.bias:.3f}  confidence={result.confidence:.3f}")
     print(result.summary[0])
+
+
+@pytest.mark.integration
+def test_news_signal_pipeline_real_yahoo_news(require_openai_settings, tmp_path):
+    """
+    Полный цикл: реальные новости Yahoo → LLM → AggregatedNewsSignal.
+
+    Шаги:
+      1. sources.news.Source → реальные статьи NVDA (≤ 10)
+      2. decide_llm_mode → если SKIP/LITE → skip теста
+      3. run_news_signal_pipeline → FULL с реальным LLM-вызовом
+      4. Проверка диапазонов bias / confidence
+
+    KERIM_REPLACE: тот же тест применим к NyseNewsAgent-обёртке после интеграции
+    с pystockinvest, замена run_news_signal_pipeline на agent.predict() прозрачна.
+    """
+    pytest.importorskip("yfinance")
+    from domain import Ticker
+    from pipeline import (
+        GateContext,
+        ScoredArticle,
+        ThresholdConfig,
+        classify_channel,
+        decide_llm_mode,
+        draft_impulse,
+        single_scalar_draft_bias,
+    )
+    from pipeline.cache import FileCache
+    from sources.news import Source
+
+    articles = Source(max_per_ticker=10, lookback_hours=48).get_articles([Ticker.NVDA])
+    if not articles:
+        pytest.skip("Yahoo не вернул новостей")
+
+    # Определяем режим гейта
+    scored = [
+        ScoredArticle(
+            published_at=a.timestamp,
+            cheap_sentiment=getattr(a, "cheap_sentiment", 0.0),
+            channel=classify_channel(a.title, a.summary)[0],
+        )
+        for a in articles
+    ]
+    d = draft_impulse(scored)
+    bias = single_scalar_draft_bias(d)
+    mode = decide_llm_mode(
+        ThresholdConfig(),
+        GateContext(
+            draft_bias=bias,
+            regime_present=d.regime_stress > 0.01,
+            regime_rule_confidence=0.85 if d.regime_stress > 0.01 else 0.0,
+            calendar_high_soon=False,
+            article_count=len(articles),
+        ),
+    )
+
+    if mode != LLMMode.FULL:
+        pytest.skip(f"Гейт выбрал {mode.value} — LLM не нужен для этого набора новостей")
+
+    try:
+        result = run_news_signal_pipeline(
+            articles,
+            "NVDA",
+            cfg=ThresholdConfig(),
+            mode=mode,
+            cache=FileCache(tmp_path),
+            settings=require_openai_settings,
+        )
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if any(kw in exc_name for kw in ("Connection", "Timeout", "Auth", "API", "HTTP")):
+            pytest.skip(f"API/сеть недоступна: {exc_name}: {exc}")
+        raise
+
+    assert -1.0 <= result.bias <= 1.0
+    assert 0.0 <= result.confidence <= 1.0
+    assert len(result.items) <= len(articles)  # batch может быть меньше
+    print(
+        f"\n[NVDA real] articles={len(articles)}  bias={result.bias:.3f}  "
+        f"conf={result.confidence:.3f}  gate={mode.value}"
+    )
+    for line in result.summary:
+        print(" ", line)
