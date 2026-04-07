@@ -128,6 +128,21 @@ def game5m_primary(tmp_path_factory):
     return tickers[0]
 
 
+@pytest.fixture(scope="session")
+def require_finbert(tmp_path_factory):
+    """
+    Проверяет что transformers установлен и FinBERT доступен.
+    Возвращает имя модели. Skip если transformers нет.
+
+    Модель может быть задана через SENTIMENT_MODEL в config.env,
+    по умолчанию ProsusAI/finbert.
+    """
+    transformers = pytest.importorskip("transformers", reason="pip install transformers")
+    import config_loader
+    config_loader.load_config_env()
+    return config_loader.get_sentiment_model_name()
+
+
 @pytest.fixture
 def require_telegram_token(load_nyse_config):
     """TELEGRAM_BOT_TOKEN из config.env или skip."""
