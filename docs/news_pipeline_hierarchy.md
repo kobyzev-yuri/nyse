@@ -6,16 +6,16 @@
 
 ---
 
-## Уровень 0 — Сбор и нормализация
+## Уровень 0 — Сбор и нормализация ✅ реализован
 
-- Источники: Yahoo, Marketaux, RSS, NewsAPI и т.д. → **`NormalizedNewsItem`** (или расширенный `NewsArticle`).
-- Обязательно: `published_at`, `url`/id, `title`, при наличии `summary`, **`provider`**.
+- Источники: Yahoo, Marketaux, NewsAPI, Alpha Vantage, RSS → `NewsArticle[]` (расширенный).
+- Поля: `published_at`, `url`, `title`, `summary`, `provider_id`, `raw_sentiment` (опционально).
 
-*Кэш:* сырой HTTP / список по тикеру (короткий TTL) — см. `news_cache_and_impulse_proposals.md`.
+*Кэш:* сырой HTTP / список по тикеру (короткий TTL) — см. `news_cache_and_impulse.md`.
 
 ---
 
-## Уровень 1 — Канал воздействия (`NewsImpactChannel`, §5.4)
+## Уровень 1 — Канал воздействия (`NewsImpactChannel`) ✅ реализован
 
 **Задача:** до любого ML/LLM понять, *какого рода* новость это для рынка.
 
@@ -31,65 +31,66 @@
 
 ---
 
-## Уровень 2 — Дешёвый сентимент и числа с API
+## Уровень 2 — Дешёвый сентимент (`cheap_sentiment`) ✅ реализован
 
-**Задача:** получить **скаляр** и/или метку без LLM.
+**Задача:** скаляр [−1, 1] на статью без LLM.
 
-1. **Готовый sentiment с провайдера** (например Marketaux по entity) → `raw_sentiment` ∈ [−1, 1] или [0, 1].
-2. **Локальный transformers**, по образцу **lse** (`services/sentiment_analyzer.py`): pipeline **FinBERT** / `SENTIMENT_MODEL`, текст `title + summary` (обрезка по длине).
+Приоритет:
+1. **`raw_sentiment`** с провайдера (Marketaux, Alpha Vantage) → ∈ [−1, 1].
+2. **FinBERT** / `SENTIMENT_MODEL` (`pipeline/sentiment.py`) → score по `title + summary`.
+3. **`price_pattern_boost`** — floor-сигнал по паттернам типа "jumped 15%" / "sinks 7%": перекрывает слабый FinBERT, если в заголовке явное ценовое движение.
 
-**Выход уровня 2:** на статью: `cheap_sentiment`, опционально `cheap_confidence` (от score модели).
+**Выход:** `article.cheap_sentiment: float`.
 
-*Токены: 0. CPU/GPU — да; кэш по `hash(text)` для повторов.*
-
----
-
-## Уровень 3 — Агрегат «чернового импульса» (без LLM Kerima)
-
-**Задача:** одно число или вектор по окну времени для **гейтинга**.
-
-- Взвешенное среднее `cheap_sentiment` с затуханием по времени.
-- **Отдельно** по каналу: среднее по `INCREMENTAL`; максимум абсолютного отклонения или отдельный счётчик по `REGIME` / `POLICY_RATES` (не смешивать в одну среднюю — §5.4).
-- Опционально: `draft_bias`, `regime_flag`, `policy_stress`.
-
-*Токены: 0.*
+*Токены: 0. Кэш: `cheap_sentiment|sha256(model+text)` → 86400 с.*
 
 ---
 
-## Уровень 4 — Гибрид: пороги, когда звать LLM (Kerima)
+## Уровень 3 — `DraftImpulse` ✅ реализован
 
-**Задача:** не гонять **полный** News selection + signal на все статьи.
+Взвешенное среднее `cheap_sentiment` с затуханием `w = exp(−ln(2)/half_life × age_hours)`.  
+Каналы **не смешиваются**: `draft_bias_incremental`, `regime_stress`, `policy_stress` — три отдельных скаляра.  
+Реализовано: `pipeline/draft.py`, скалярный прокси: `single_scalar_draft_bias()`.
 
-Примеры условий (настраиваются env):
-
-| Условие | Действие |
-|---------|----------|
-| Все статьи в окне «спокойные» и \|`draft_bias`\| < **T1** | Итог новостного импульса = только уровень 3 (+ опционально один **дешёвый** LLM-вызов на **сжатый дайджест** заголовков — микро-режим) |
-| \|`draft_bias`\| ≥ **T1** или есть **`REGIME`** с rule-confidence > **T2** или скоро **HIGH** календарь | Включить **полный пайплайн Kerima** (selection + structured signal) хотя бы на **подмножество** статей (топ-K по \|cheap_sentiment\| или все REGIME) |
-| Много статей (K > **N**) | Сначала **selection-only** LLM на заголовках/сводках, затем signal только на отобранных — как у Kerima, но сужение батча |
-
-**Выход уровня 4:** флаг `llm_full` / `llm_lite` / `llm_skip` и список статей для LLM.
-
-*Кэш:* ключ = `hash(список id статей + model + prompt_version)` на ответ structured output.
+*Токены: 0. Кэш: 300 с по `(ticker, window, half_life)`.*
 
 ---
 
-## Уровень 5 — LLM Kerima (полный смысл полей)
+## Уровень 4 — Гейт (`LLMMode`) ✅ реализован
 
-**Задача:** `NewsSignal` с **sentiment, impact_strength, relevance, surprise, time_horizon, confidence** и затем **`AggregatedNewsSignal`**.
+Реализован в `pipeline/gates.py::decide_llm_mode()`. Порядок ветвей:
 
-- Вызывается **только** для статей/батчей, прошедших уровень 4.
-- Для **`INCREMENTAL`** — основной смысл полей как сейчас в pystockinvest.
-- Для **`REGIME` / `POLICY_RATES`** — либо **отдельный короткий промпт** (один абзац на весь фон), либо те же поля, но **не смешивать** при агрегации с тикерными заголовками (отдельный вклад `regime_overhang` — §5.5).
+| Условие | Результат |
+|---------|-----------|
+| `calendar_high_soon` | `FULL` |
+| `regime_present` и `regime_confidence ≥ T2` | `FULL` |
+| `|draft_bias| ≥ T1 × 2.0` (сильный сигнал) | `FULL` |
+| `|draft_bias| < T1` и нет REGIME | `SKIP` |
+| `article_count > N` | `LITE` |
+| иначе | `LITE` |
 
-*Токены: максимум здесь; кэш обязателен.*
+**Выход:** `LLMMode` (`SKIP` / `LITE` / `FULL`) + `GateContext` (логируется).
 
 ---
 
-## Уровень 6 — Слияние с техникой и календарём
+## Уровень 5 — LLM / `AggregatedNewsSignal` ✅ реализован
 
-- Как в `TradeBuilder` pystockinvest: веса `tech / news / calendar`.
-- Новостной вклад: либо **`AggregatedNewsSignal.bias`** с LLM, либо при `llm_skip` — **`draft_bias`** с явно заниженной новостной confidence.
+`run_news_signal_pipeline(articles, cfg)` → `AggregatedNewsSignal(bias, confidence, summary, items)`.
+
+- Вызывается только при `LITE` / `FULL`.
+- При `LITE`: батч сокращается до топ-N по `|cheap_sentiment|`.
+- При `FULL`: все статьи в окне.
+- Кэш ответа по `cache_key_llm(messages, model, prompt_version)` → TTL 3600 с.
+- Для `REGIME` / `POLICY_RATES` — пока тот же промпт; отдельный короткий промпт — в плане (§6 ниже).
+
+---
+
+## Уровень 6 — Слияние с техническим сигналом 🔲 план
+
+- Вход: `AggregatedNewsSignal` (или `draft_bias` при `SKIP`) + `TechnicalSignal` + `CalendarSignal`.
+- Выход: `FusedSignal(bias, confidence, side, entry_hint)`.
+- Веса `tech / news / calendar` по аналогии с `TradeBuilder` в pystockinvest.
+- При `REGIME` в окне — `regime_overhang` снижает итоговую `confidence` или требует отдельного порога для входа.
 
 ---
 
@@ -113,15 +114,19 @@
 
 ---
 
-## Калибровка (G): дефолты порогов и журнал
+## Калибровка (G): дефолты порогов и профили
 
-| Параметр | Поле в `ThresholdConfig` | Значение по умолчанию | Где в коде |
-|----------|---------------------------|------------------------|------------|
-| **T1** | `t1_abs_draft_bias` | `0.25` | `pipeline/types.py` |
-| **T2** | `t2_regime_confidence` | `0.5` | то же |
-| **N** | `max_articles_full_batch` | `15` | то же |
+| Параметр | Поле в `ThresholdConfig` | Дефолт (`ThresholdConfig()`) | `PROFILE_GAME5M` | `PROFILE_CONTEXT` |
+|----------|---------------------------|------------------------------|-----------------|-------------------|
+| **T1** | `t1_abs_draft_bias` | `0.20` | `0.12` | `0.20` |
+| **T2** | `t2_regime_confidence` | `0.5` | `0.5` | `0.5` |
+| **N** | `max_articles_full_batch` | `15` | `8` | `15` |
+| **regime_stress_min** | `regime_stress_min` | `0.05` | `0.05` | `0.05` |
 
-Процедура подстройки, метрики «лишние full» и «пропуски», шаблон журнала — **`docs/calibration.md`**. После калибровки обновляйте дефолты в коде (и при необходимости таблицу здесь).
+`PROFILE_GAME5M` — для волатильных тикеров (SNDK, NBIS, MU, LITE, CIEN, ASML): ниже T1, меньше батч.  
+`PROFILE_CONTEXT` — для широких имён (MSFT, META, AMZN, NVDA): стандартные пороги.
+
+Процедура подстройки, метрики «лишние full» и «пропуски», шаблон журнала — **`docs/calibration.md`** (4 прогона зафиксированы). После калибровки обновляйте дефолты в коде (и при необходимости таблицу здесь).
 
 ---
 
@@ -148,7 +153,7 @@
 ## Согласованность с документами
 
 - §5.4–5.5 `news_calendar_inventory.md` — оси каналов и веса **REGIME**/календаря.
-- `news_cache_and_impulse_proposals.md` — TTL кэша и методы импульса.
+- `news_cache_and_impulse.md` — TTL кэша и реализованные методы импульса.
 - `testing_telegram_plan.md` — mock LLM для уровней 4–5 в тестах.
 - `calibration.md` — калибровка T1/T2/N (этап G).
 - `news_sources_testing_and_pipeline_roadmap.md` — **что покрыто тестами источников** и **текущая дорожная карта** этапов A–G (закрывается по мере выполнения).

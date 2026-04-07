@@ -1,158 +1,120 @@
-# Новости и календарь: инвентаризация, пробелы, типизация (этап без БД)
+# Новости и календарь: реализованный контур
 
-Контекст: **nyse** — код и источники; **lse** — эталон пайплайна (KB, cron, издержки); **pystockinvest / Kerima** — LLM по новостям и часть техники; позже **merge** в общий контур. Сейчас **без PostgreSQL**, допустим **файловый/локальный кэш** для тестов и экономии квот API.
-
----
-
-## 1. Что уже есть в **nyse** (`sources/`)
-
-| Область | Реализация | Провайдер | Выход (сейчас) |
-|--------|------------|-----------|----------------|
-| Новости по тикеру | `news.py` | **Yahoo** через `yfinance.get_news` | `NewsArticle` (title, summary, time, link, publisher) |
-| Макро-календарь | `ecalendar.py` | **Investing.com** JSON API | `CalendarEvent` (время, валюта, actual/forecast/previous, важность) |
-| Свечи / цена | `candles.py` | yfinance | `Candle[]` — база для техники (Kerima) |
-| Скринер-метрики | `metrics.py` | **Finviz** (finvizfinance) | `TickerMetrics` — техника |
-| Earnings | `earnings.py` | yfinance | `Earnings` — контекст вокруг входа |
-
-**Нет в nyse:** RSS, NewsAPI, Investing HTML-лента, **Marketaux**, **Alpha Vantage** (новости/макро), sentiment как поле в доменной модели (кроме косвенно через будущий LLM).
+Документ фиксирует **реализованное** состояние источников, типизации и контракта домена.  
+Гипотезы и «кандидаты на добавление» — закрыты; раздел «план» — только незакрытые задачи.
 
 ---
 
-## 2. Что есть в **lse** (ориентир, не дублировать слепо)
+## 1. Источники данных: что реализовано
 
-| Источник | Назначение |
-|----------|------------|
-| `investing_calendar_parser` | Макро с Investing **(HTML)** — дубль по смыслу с nyse JSON, но другой канал |
-| `investing_news_fetcher` | Лента **stock-market-news** + ключевые слова по тикеру → KB |
-| `rss_news_fetcher` | ЦБ и др. RSS → KB |
-| `newsapi_fetcher` | NewsAPI → KB |
-| `alphavantage_fetcher` | Котировки / опционально economic (лимиты free tier) |
-| `knowledge_base` | Единое хранилище + `sentiment_score`, `event_type`, `ingested_at` |
+| Область | Модуль | Провайдер | Выход |
+|--------|--------|-----------|-------|
+| Новости по тикеру | `sources/news.py` | Yahoo / yfinance | `NewsArticle[]` |
+| Новости + entity sentiment | `sources/news_marketaux.py` | Marketaux | `NewsArticle[]` с `raw_sentiment` |
+| Тематические новости | `sources/news_newsapi.py` | NewsAPI v2 | `NewsArticle[]` |
+| Новости + sentiment | `sources/news_alphavantage.py` | Alpha Vantage | `NewsArticle[]` с `raw_sentiment` |
+| Макро / ЦБ / агентства | `sources/news_rss.py` | RSS / Atom | `NewsArticle[]` (ticker=GENERAL) |
+| Макро-календарь | `sources/ecalendar.py` | Investing.com JSON | `CalendarEvent[]` |
+| Свечи / цена | `sources/candles.py` | yfinance | `Candle[]` |
+| Скринер-метрики | `sources/metrics.py` | Finviz | `TickerMetrics` |
+| Earnings | `sources/earnings.py` | yfinance | `Earnings` |
 
-Идея для nyse без БД: **те же провайдеры** подключать как отдельные адаптеры с **нормализованным типом** (ниже), складывать в память или в кэш.
-
----
-
-## 3. Кандидаты на добавление (вы упомянули)
-
-### [Marketaux](https://www.marketaux.com/)
-
-- **Что даёт:** REST JSON, статьи с `published_at`, `url`, `source`, **entities[]** с `symbol`, **`sentiment_score`**, match по тикеру; глобальные новости и финрынки.
-- **Плюс для решения о входе:** готовый **числовой sentiment по сущности** — хороший вход в **импульс новостного фона** до/вместе с LLM (Kerima).
-- **Учёт:** квоты по плану; кэш ответов по `(symbol, date_bucket)` для тестов.
-
-### Alpha Vantage
-
-- **Что обычно интересно:** новости/sentiment (если включите подписку), макро-индикаторы (в lse уже описаны ограничения free tier).
-- **Плюс:** официальный API, стабильный контракт при платном плане.
-- **Минус:** на бесплатном плане лимиты и пустые economic-эндпоинты — подходит как **платный** слой, не как единственный.
+**Investing HTML-лента** — не реализована (хрупко, дублирует Marketaux/Yahoo).
 
 ---
 
-## 4. Сводка «есть / нет / стоит добавить»
+## 2. Доменная модель: реализованные типы
 
-| Источник | nyse сейчас | lse | Рекомендация для nyse |
-|----------|-------------|-----|------------------------|
-| Yahoo / yfinance news | ✅ | косвенно | Оставить как дешёвый baseline |
-| Investing календарь (JSON) | ✅ | HTML-вариант | Оставить; опционально fallback как в lse |
-| Finviz metrics | ✅ | да | Оставить (техника → Kerima) |
-| RSS (ЦБ и др.) | ❌ | ✅ | **Добавить** для макро-импульса без Yahoo |
-| NewsAPI | ❌ | ✅ | **Добавить** при ключе в env |
-| Investing лента по ключевым словам | ❌ | ✅ | **Опционально** (дубли с Marketaux/Yahoo) |
-| **Marketaux** | ❌ | ❌ | **Добавить** как основной источник **с entity + sentiment** |
-| Alpha Vantage news/sentiment | ❌ | частично | **Добавить** при подписке; макро — по необходимости |
-| KB / PostgreSQL | ❌ | ✅ | Позже; сейчас **кэш** (файл/SQLite optional) |
+### `NewsArticle` (`domain.py`)
 
----
+| Поле | Тип | Примечание |
+|------|-----|-----------|
+| `ticker` | `Ticker` | включая `Ticker.GENERAL` для нетикерных лент |
+| `title`, `summary` | `str` | |
+| `timestamp` | `datetime` (UTC) | |
+| `link` | `Optional[str]` | для дедупликации |
+| `publisher` | `Optional[str]` | |
+| `provider_id` | `Optional[str]` | `"yfinance"`, `"marketaux"`, `"newsapi"` и т.д. |
+| `raw_sentiment` | `Optional[float]` | [−1, 1]; от Marketaux / Alpha Vantage |
+| `cheap_sentiment` | `Optional[float]` | [−1, 1]; заполняется на уровне 2 |
 
-## 5. Типизация и расширение (единый контракт под LLM + технику)
+### `NewsSignal` и `AggregatedNewsSignal` (`domain.py`)
 
-Цель: все провайдеры отдают согласованные структуры, чтобы **pystockinvest** склеивал **технику (Kerima)** + **новостной импульс** (агрегат + опционально LLM).
+Реализованы как DTO уровня 5, согласованы с `pystockinvest/agent/models.py`:
 
-### 5.1. Перечисления (предложение)
+```python
+@dataclass
+class NewsSignal:
+    sentiment: float            # [−1, 1]
+    impact_strength: NewsImpact      # LOW | MODERATE | HIGH
+    relevance: NewsRelevance         # LOW | MEDIUM | HIGH
+    surprise: NewsSurprise           # NONE | MINOR | SIGNIFICANT | MAJOR
+    time_horizon: NewsTimeHorizon    # INTRADAY | SHORT | MEDIUM | LONG
+    confidence: float           # [0, 1]
 
-- **`NewsProviderId`**: `YFINANCE | MARKETAUX | NEWSAPI | RSS | INVESTING_NEWS | ALPHAVANTAGE | …`
-- **`MacroProviderId`**: `INVESTING_JSON | ALPHAVANTAGE_ECONOMIC | …`
-- **`NewsChannelKind`**: `HEADLINE | MACRO | EARNINGS_RUMOR | ANALYST | OTHER` (грубая классификация до LLM)
-- **`NewsImpactChannel`** (или аналог): `INCREMENTAL | REGIME | POLICY_RATES` — см. §5.4: обычный рыночный поток vs геополитика/смена режима vs ставка и ЦБ
-- **`SentimentLabel` или float**: провайдеры с числом — хранить `raw_score: float | None`; LLM — отдельное поле `llm_score` / `llm_summary`
+@dataclass
+class AggregatedNewsSignal:
+    bias: float
+    confidence: float
+    summary: list[str]
+    items: list[NewsSignal]
+```
 
-### 5.2. Нормализованная новость (расширение `NewsArticle` или новый DTO)
+### `NewsImpactChannel` (`pipeline/types.py`)
 
-Поля, которые стоит иметь в **общем** типе (часть опциональна):
+| Канал | Смысл | Как назначается |
+|-------|-------|----------------|
+| `INCREMENTAL` | Обычный рыночный поток | По умолчанию |
+| `REGIME` | Геополитика, санкции, системные шоки | Словари: `war`, `sanctions`, `embargo`, … |
+| `POLICY_RATES` | Решения ЦБ, ставки, QE/QT | Словари: `Fed`, `FOMC`, `rate hike`, … |
 
-| Поле | Назначение |
-|------|------------|
-| `id` / `fingerprint` | Дедуп: `hash(url)` или `uuid` от Marketaux |
-| `provider` | `NewsProviderId` |
-| `ticker` | `Ticker` или `str` для внешнего символа |
-| `title`, `summary`, `url` | Как сейчас |
-| `published_at` | UTC |
-| `sentiment_score` | −1…1 или 0…1, если провайдер даёт (Marketaux entity) |
-| `symbols_mentioned` | список для мульти-тикерных статей |
-| `raw` | опционально фрагмент JSON для отладки / LLM |
+Реализовано в `pipeline/channels.py`. Каналы **не смешиваются** при агрегации `DraftImpulse`.
 
-`domain.NewsArticle` можно **расширить** или ввести `NormalizedNewsItem` в `sources/` и маппить Yahoo/Marketaux → один тип.
+### `CalendarEvent` (`domain.py`)
 
-### 5.3. Календарь
-
-`CalendarEvent` уже хорош для макро. Расширения:
-
-- **`provider`**: `MacroProviderId`
-- **`event_id`** (строка): дедуп между Investing и AV
-- Опционально связь с **новостью** (редко на первом этапе)
-
-### 5.4. Режим воздействия: «обычный рынок» vs смена режима
-
-Идея: не все новости действуют одним масштабом. Часть **вписывается** в текущий тренд/настроение и **подправляет** ожидаемое направление (рост/снижение) в рамках уже заложенной в технику и базовый сентимент. Другая часть несёт **геополитические** или **системные** риски: войны, санкции, эмбарго, резкие сдвиги альянсов — они могут **радикально переопределить** направление и даже сделать бессмысленным «локальный» бычий/медвежий сигнал по тикеру до смены режима волатильности. Третья группа — **крупные решения по ставке и денежно-кредитной политике** (ФРС, ECB и т.д.): не обязательно «геополитика», но **глобальный мультипликатор** риска и дисконтирования; частично дублируется **макро-календарём** (CPI, NFP, заседания), но в новостной ленте это ещё и **интерпретации, минутки, неожиданность**.
-
-Предлагаемая ось (ортогонально к провайдеру и к тикеру):
-
-| Уровень / тег | Смысл | Типичный эффект на предсказание |
-|---------------|--------|----------------------------------|
-| **`INCREMENTAL`** (рынок по умолчанию) | Отчётность, аналитики, отраслевые новости, «обычный» поток | Вес как у **базового** новостного импульса; хорошо стыкуется с агрегатом sentiment и с LLM-слоем Kerima (`relevance`, `impact`, `time_horizon`). |
-| **`REGIME`** (геополитика, системный шок) | События, меняющие оценку риска всего рынка или сектора | **Повышенный вес** или отдельный канал: не смешивать в одну среднюю с заголовками про один тикер; при высокой уверенности классификации — **флаг «режим»**: может **снижать доверие** к чисто техническому входу или требовать **отдельного порога** (например не входить в LONG по одной технике при «regime risk high»). |
-| **`POLICY_RATES`** | Ставка, QE/QT, форвардные гайды центробанков | Как правило **высокий вес на индекс/рынок в целом** и на **TLT/длительность**; для одиночного тикера — через beta и сектор. Частично пересекается с **`CalendarEvent`** по времени; новость добавляет **норратив** после факта (разборы, спикеры). |
-
-Связь с **Kerima**: поля `surprise`, `impact_strength`, `time_horizon` в `NewsSignal` остаются полезны внутри **`INCREMENTAL`**. Для **`REGIME`** / **`POLICY_RATES`** имеет смысл либо отдельная метка **до** агрегации (правило/модель классификации или отдельный LLM-вызов), либо явное поле в нормализованной новости, чтобы **взвешивание** в `AggregatedNewsSignal` не «размывало» редкий сильный шок средним потоком Yahoo.
-
-### 5.5. Веса в предсказании (идея, не реализация)
-
-- **Базовый путь:** взвешенный sentiment / bias по новостям, как в pystockinvest (релевантность × сила × горизонт × confidence).  
-- **Поправка на режим:** если за окно есть хотя бы одна новость с тегом **`REGIME`** с достаточной уверенностью — ввести в формулу **отдельный член** `regime_overhang` (например 0…1) или **умножить** дисперсию/снизить итоговый `confidence` сделки.  
-- **Политика ставок:** новости/события **`POLICY_RATES`** + данные календаря — **согласовать веса**, чтобы не двойной счёт одного и того же; приоритет: **факт из календаря** (число, surprise) + **новость как контекст** для LLM.
-
-Итог: типизация **не только «источник API»**, но и **канал воздействия** (инкрементный / режим / ставка), чтобы управлять **вкладом в предсказание** и не смешивать «подправить направление» с «сломать модель».
+| Поле | Тип |
+|------|-----|
+| `time` | `datetime` (UTC) |
+| `currency` | `Currency` |
+| `importance` | `CalendarEventImportance`: LOW / MEDIUM / HIGH |
+| `actual`, `forecast`, `previous` | `Optional[str]` |
 
 ---
 
-## 6. Импульс для финального решения о входе (логика слоя)
+## 3. Канал воздействия: реализованная логика (§5.4)
 
-1. **Техника** (Kerima / Finviz / свечи): сигнал/фильтр по правилам или модели.  
-2. **Новостной фон:** агрегат по окну (например 24–72 ч): min/median sentiment, count negative, флаги «высокая волатильность новостей».  
-3. **LLM (Kerima):** сжатие потока в 1–3 предложения + оценка риска входа **при наличии токенов**.  
-4. **Правило слияния:** например «техника BUY + новостной импульс не strongly negative» или веса; детали — в pystockinvest.
+Три канала ортогональны провайдеру и тикеру:
 
-Без БД: импульс считать **на лету** из списка `NormalizedNewsItem[]` + кэш сырья.
+| Канал | Типичный эффект | В коде |
+|-------|----------------|--------|
+| **INCREMENTAL** | Основной новостной импульс; вес по relevance × impact × horizon × confidence | `pipeline/news_signal_aggregator.py` |
+| **REGIME** | Повышенный `regime_stress`; при `> T2` → гейт принудительно `FULL`; не смешивается с INCREMENTAL | `pipeline/draft.py`, `pipeline/gates.py` |
+| **POLICY_RATES** | Отдельный `policy_stress`; частично перекрывается с CalendarEvent HIGH | `pipeline/draft.py` |
 
----
-
-## 7. Кэш без БД (экономия квот и токенов)
-
-- **Ключ:** `provider + endpoint_hash + params` или `url` для статей.  
-- **Хранилище:** `~/.cache/nyse/` или `./.cache/nyse/` JSON/pickle, TTL из env (`NYSE_CACHE_TTL_SEC`).  
-- **LLM:** кэшировать **промпт + хеш входных заголовков** → ответ, чтобы не платить дважды за один сценарий теста.
+`regime_stress > PROFILE_GAME5M.regime_stress_min (0.05)` → `regime_present=True` → возможен `FULL`.
 
 ---
 
-## 8. Следующие шаги кода (минимальный порядок)
+## 4. Веса в агрегаторе: реализовано (§5.5)
 
-1. Ввести **`NormalizedNewsItem`** (или расширить `NewsArticle`) + **`NewsProviderId`**.  
-2. Реализовать адаптер **Marketaux** (env `MARKETAUX_API_KEY`).  
-3. Опционально обёртка **Alpha Vantage** только для согласованных эндпоинтов после выбора плана.  
-4. Подключить **кэш** общий для всех HTTP-провайдеров.  
-5. Согласовать с Kerima контракт: «на вход LLM — список нормализованных новостей + агрегаты техники».
+В `pipeline/news_signal_aggregator.py`:
+
+```
+relevance_weight:  LOW=0.5, MEDIUM=1.0, HIGH=1.5
+impact_weight:     LOW=0.5, MODERATE=1.0, HIGH=2.0
+horizon_weight:    INTRADAY=1.0, SHORT=0.8, MEDIUM=0.6, LONG=0.4
+confidence:        умножается на итоговый вес статьи
+```
+
+`AggregatedNewsSignal.bias` = взвешенная сумма `sentiment × weights` / `Σ weights`.
 
 ---
 
-*Документ можно обновлять по мере появления новых провайдеров или после слияния с pystockinvest.*
+## 5. Что остаётся (план)
+
+| Задача | Примечание |
+|--------|-----------|
+| **`regime_overhang`** как явный член формулы слияния с техническим сигналом | При `REGIME`-статьях снижать `confidence` итоговой сделки или вводить отдельный вес |
+| Отдельный короткий LLM-промпт для `REGIME` / `POLICY_RATES` батча | Сейчас они попадают в общий `build_signal_messages` |
+| `provider_id` в фильтре при дедупликации (приоритет провайдеров) | Сейчас дедуп только по URL-хешу |
+| Связь `CalendarEvent` с новостью (пересечение по времени ± N часов) | Низкий приоритет |
