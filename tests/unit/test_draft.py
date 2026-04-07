@@ -17,6 +17,7 @@ import pytest
 from domain import NewsArticle, Ticker
 
 from pipeline import (
+    MultiTickerGateSession,
     NewsImpactChannel,
     ScoredArticle,
     draft_impulse,
@@ -104,6 +105,102 @@ def test_draft_policy_max_abs_and_counts(utc_now: datetime):
     assert d.articles_incremental == 0
     assert d.max_abs_policy == pytest.approx(0.5)
     assert d.policy_stress > 0.0
+
+
+def _make_article(ticker, title, summary=None, sentiment=0.0, hours_ago=1):
+    from datetime import timedelta
+
+    return NewsArticle(
+        ticker=ticker,
+        title=title,
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+        summary=summary,
+        link=None,
+        publisher=None,
+        cheap_sentiment=sentiment,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Дедупликация REGIME macro-статей
+# ---------------------------------------------------------------------------
+
+
+def test_seen_regime_titles_deduplication(utc_now: datetime):
+    """
+    Одна REGIME-статья (war) у двух тикеров:
+    - первый тикер → ch=REGIME, title добавляется в seen_regime_titles
+    - второй тикер → та же статья понижается до INCREMENTAL
+    """
+    war_title = "Nvidia Stock Drops as Iran War Heats Up"
+    war_summary = "Shares fell after Iran escalation news."
+
+    a_msft = _make_article(Ticker.MSFT, war_title, war_summary, sentiment=-0.9)
+    a_nvda = _make_article(Ticker.NVDA, war_title, war_summary, sentiment=-0.9)
+
+    seen: set[str] = set()
+
+    scored_msft = scored_from_news_articles([a_msft], seen_regime_titles=seen)
+    scored_nvda = scored_from_news_articles([a_nvda], seen_regime_titles=seen)
+
+    assert scored_msft[0].channel == NewsImpactChannel.REGIME, "первый тикер — REGIME"
+    assert scored_nvda[0].channel == NewsImpactChannel.INCREMENTAL, "дубликат → INCREMENTAL"
+    assert war_title in seen
+    assert len(seen) == 1
+
+
+def test_seen_regime_titles_none_is_independent(utc_now: datetime):
+    """Без seen_regime_titles оба тикера получают REGIME независимо (старое поведение)."""
+    war_title = "Nvidia Stock Drops as Iran War Heats Up"
+
+    a1 = _make_article(Ticker.MSFT, war_title, sentiment=-0.9)
+    a2 = _make_article(Ticker.NVDA, war_title, sentiment=-0.9)
+
+    s1 = scored_from_news_articles([a1])  # seen_regime_titles=None
+    s2 = scored_from_news_articles([a2])
+
+    assert s1[0].channel == NewsImpactChannel.REGIME
+    assert s2[0].channel == NewsImpactChannel.REGIME
+
+
+def test_multi_ticker_gate_session_dedup(utc_now: datetime):
+    """
+    MultiTickerGateSession: тот же war заголовок у MSFT, META, AMZN —
+    только MSFT получает reg_stress > 0; META и AMZN — 0.
+    """
+    war_title = "Goldman Sachs on Iran War Impact on Big Tech"
+
+    articles_msft = [_make_article(Ticker.MSFT, war_title, sentiment=-0.9)]
+    articles_meta = [_make_article(Ticker.META, war_title, sentiment=-0.9)]
+    articles_amzn = [_make_article(Ticker.AMZN, war_title, sentiment=-0.9)]
+
+    session = MultiTickerGateSession()
+
+    d_msft = draft_impulse(session.scored(articles_msft), now=utc_now)
+    d_meta = draft_impulse(session.scored(articles_meta), now=utc_now)
+    d_amzn = draft_impulse(session.scored(articles_amzn), now=utc_now)
+
+    assert d_msft.regime_stress > 0.0, "первый тикер в сессии — REGIME"
+    assert d_meta.regime_stress == pytest.approx(0.0), "META дубликат → no regime_stress"
+    assert d_amzn.regime_stress == pytest.approx(0.0), "AMZN дубликат → no regime_stress"
+    assert session.seen_regime_count == 1
+
+
+def test_multi_ticker_session_unique_regime_articles(utc_now: datetime):
+    """
+    Разные REGIME-статьи у разных тикеров — оба получают reg_stress.
+    """
+    a_nvda = _make_article(Ticker.NVDA, "Nvidia drops as Iran War escalates", sentiment=-0.9)
+    a_asml = _make_article(Ticker.ASML, "ASML faces new sanctions from US", sentiment=-0.8)
+
+    session = MultiTickerGateSession()
+
+    d_nvda = draft_impulse(session.scored([a_nvda]), now=utc_now)
+    d_asml = draft_impulse(session.scored([a_asml]), now=utc_now)
+
+    assert d_nvda.regime_stress > 0.0
+    assert d_asml.regime_stress > 0.0
+    assert session.seen_regime_count == 2
 
 
 if __name__ == "__main__":

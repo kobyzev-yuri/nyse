@@ -11,7 +11,7 @@ from .news_cache import (
     serialize_news_article,
 )
 from .channels import classify_channel
-from .draft import ScoredArticle, draft_impulse, scored_from_news_articles, single_scalar_draft_bias
+from .draft import MultiTickerGateSession, ScoredArticle, draft_impulse, scored_from_news_articles, single_scalar_draft_bias
 from .calendar_context import build_gate_context, calendar_high_soon
 from .gates import decide_llm_mode
 from .ingest import merge_news_articles, with_normalized_link
@@ -51,6 +51,7 @@ __all__ = [
     "calendar_high_soon",
     "build_gate_context",
     "classify_channel",
+    "MultiTickerGateSession",
     "ScoredArticle",
     "scored_from_news_articles",
     "draft_impulse",

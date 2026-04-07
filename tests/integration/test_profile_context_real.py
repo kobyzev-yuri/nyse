@@ -226,6 +226,98 @@ def test_finbert_ambiguous_headlines(require_finbert):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
+def test_multi_ticker_session_dedup_live(enriched_context, context_ticker_list):
+    """
+    MultiTickerGateSession на live данных: MSFT, META, AMZN — один Goldman/IranWar дубликат.
+
+    Сравниваем gate-решения:
+      - без сессии (old): все три → full via REGIME (3x LLM вызова)
+      - с сессией (new):  MSFT → full; META и AMZN — REGIME понижен до INCREMENTAL
+        → gate пересчитывается по bias без REGIME-пути
+
+    Количество ожидаемых LLM вызовов снижается.
+    """
+    from pipeline import GateContext, MultiTickerGateSession, decide_llm_mode, draft_impulse, single_scalar_draft_bias
+    from pipeline.types import PROFILE_CONTEXT
+
+    cfg = PROFILE_CONTEXT
+    mag7 = [t for t in context_ticker_list if t.value in ("MSFT", "META", "AMZN")]
+    if not any(enriched_context.get(t) for t in mag7):
+        pytest.skip("Нет live данных для MSFT/META/AMZN")
+
+    def gate_from_draft(arts, cfg):
+        from pipeline.draft import scored_from_news_articles as _s
+        scored = _s(arts)
+        d = draft_impulse(scored)
+        bias = single_scalar_draft_bias(d)
+        ctx = GateContext(
+            draft_bias=bias,
+            regime_present=d.regime_stress > cfg.regime_stress_min,
+            regime_rule_confidence=0.85 if d.regime_stress > cfg.regime_stress_min else 0.0,
+            calendar_high_soon=False,
+            article_count=len(arts),
+        )
+        return decide_llm_mode(cfg, ctx).value, d.regime_stress
+
+    # Без сессии (старое поведение)
+    old_modes = {}
+    for t in mag7:
+        arts = enriched_context.get(t, [])
+        if arts:
+            mode, rs = gate_from_draft(arts, cfg)
+            old_modes[t.value] = (mode, rs)
+
+    # С сессией (новое поведение)
+    session = MultiTickerGateSession()
+    new_modes = {}
+    for t in mag7:
+        arts = enriched_context.get(t, [])
+        if not arts:
+            continue
+        scored = session.scored(arts)
+        d = draft_impulse(scored)
+        bias = single_scalar_draft_bias(d)
+        ctx = GateContext(
+            draft_bias=bias,
+            regime_present=d.regime_stress > cfg.regime_stress_min,
+            regime_rule_confidence=0.85 if d.regime_stress > cfg.regime_stress_min else 0.0,
+            calendar_high_soon=False,
+            article_count=len(arts),
+        )
+        mode = decide_llm_mode(cfg, ctx).value
+        new_modes[t.value] = (mode, d.regime_stress)
+
+    print(f"\n{'Тикер':6s}  {'без сессии':>15}  {'с сессией':>15}  {'деdup?':>6}")
+    print("-" * 55)
+    saved = 0
+    for ticker in [t.value for t in mag7]:
+        old = old_modes.get(ticker)
+        new = new_modes.get(ticker)
+        if not old or not new:
+            continue
+        old_mode, old_rs = old
+        new_mode, new_rs = new
+        dedup = "✓" if new_rs < old_rs else ""
+        if dedup:
+            saved += 1
+        print(
+            f"{ticker:6s}  regime={old_rs:.3f} {old_mode:>5}  "
+            f"regime={new_rs:.3f} {new_mode:>5}  {dedup}"
+        )
+    print(f"\nLLM вызовов сэкономлено (FULL→не-FULL): ~{saved}")
+    print(f"Уникальных REGIME-статей в сессии: {session.seen_regime_count}")
+
+    assert new_modes, "Нет результатов"
+    # Первый тикер в сессии должен получить REGIME если было ⚠REGIME у хотя бы одного
+    first_ticker = [t.value for t in mag7 if enriched_context.get(t)][0]
+    old_first_mode = old_modes.get(first_ticker, (None,))[0]
+    new_first_mode = new_modes.get(first_ticker, (None,))[0]
+    assert new_first_mode == old_first_mode, (
+        f"Первый тикер {first_ticker} должен сохранять gate-решение"
+    )
+
+
+@pytest.mark.integration
 def test_profile_comparison_nvda(enriched_context):
     """
     NVDA: сравниваем gate при PROFILE_CONTEXT vs PROFILE_GAME5M.

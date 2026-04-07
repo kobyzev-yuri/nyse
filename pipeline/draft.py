@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
 from .types import DraftImpulse, NewsImpactChannel
 
@@ -88,11 +88,23 @@ def draft_impulse(
     )
 
 
-def scored_from_news_articles(articles: Sequence["NewsArticle"]) -> List[ScoredArticle]:
+def scored_from_news_articles(
+    articles: Sequence["NewsArticle"],
+    *,
+    seen_regime_titles: Optional[Set[str]] = None,
+) -> List[ScoredArticle]:
     """
     Уровень 3: ``NewsArticle`` с уже заполненным ``cheap_sentiment`` (после этапа B)
     + классификация канала → ``ScoredArticle`` для ``draft_impulse``.
     Если ``cheap_sentiment`` ещё None — подставляется 0.0.
+
+    ``seen_regime_titles`` — опциональный разделяемый ``set`` для дедупликации
+    macro REGIME-статей в multi-ticker сессиях.  Если title REGIME-статьи уже
+    присутствует в ``seen_regime_titles``, канал понижается до ``INCREMENTAL``
+    (статья остаётся, но не даёт повторного reg_stress у второго/третьего тикера).
+    После обработки title новых REGIME-статей добавляются в ``seen_regime_titles``.
+
+    При ``seen_regime_titles=None`` (по умолчанию) поведение идентично старому.
     """
     from domain import NewsArticle
 
@@ -103,6 +115,14 @@ def scored_from_news_articles(articles: Sequence["NewsArticle"]) -> List[ScoredA
         if not isinstance(a, NewsArticle):
             raise TypeError("expected NewsArticle")
         ch, _ = classify_channel(a.title, a.summary)
+
+        # Дедупликация macro REGIME-статей в multi-ticker сессии.
+        if ch == NewsImpactChannel.REGIME and seen_regime_titles is not None:
+            if a.title in seen_regime_titles:
+                ch = NewsImpactChannel.INCREMENTAL  # уже учтена у другого тикера
+            else:
+                seen_regime_titles.add(a.title)
+
         cs = a.cheap_sentiment if a.cheap_sentiment is not None else 0.0
         out.append(
             ScoredArticle(
@@ -112,6 +132,39 @@ def scored_from_news_articles(articles: Sequence["NewsArticle"]) -> List[ScoredA
             )
         )
     return out
+
+
+@dataclass
+class MultiTickerGateSession:
+    """
+    Сессия gate-оценки для нескольких тикеров.
+
+    Отслеживает REGIME-статьи (по title) уже учтённые для предыдущих тикеров.
+    Если одна macro-статья появляется у N тикеров (♻ ДУБЛИКАТ), она даёт
+    полный reg_stress только первому тикеру; для остальных канал понижается
+    до INCREMENTAL.
+
+    Использование::
+
+        session = MultiTickerGateSession()
+        for ticker, articles in articles_by_ticker.items():
+            scored = session.scored(articles)
+            d = draft_impulse(scored)
+            ...
+
+    Без ``MultiTickerGateSession`` каждый тикер обрабатывается независимо —
+    поведение идентично однотикерному режиму.
+    """
+
+    _seen_regime: Set[str] = field(default_factory=set)
+
+    def scored(self, articles: Sequence["NewsArticle"]) -> List[ScoredArticle]:
+        """Классифицирует статьи с учётом ранее виденных REGIME-статей."""
+        return scored_from_news_articles(articles, seen_regime_titles=self._seen_regime)
+
+    @property
+    def seen_regime_count(self) -> int:
+        return len(self._seen_regime)
 
 
 def single_scalar_draft_bias(d: DraftImpulse) -> float:

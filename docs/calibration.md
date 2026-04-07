@@ -152,6 +152,75 @@ pct ≥  2% → ±0.4
 
 **Тесты:** 14 новых тестов в `tests/unit/test_sentiment.py` (всего 140 unit-тестов).
 
+### Прогон 5 — 2026-04-07, live NYSE: PROFILE_CONTEXT + PROFILE_GAME5M + дедупликация
+
+Контекст: открытая торговая сессия NYSE, иранский геополитический кризис активен.
+
+#### PROFILE_GAME5M (все тикеры → FULL)
+
+| Тикер | n | avg cs | reg_stress | bias   | gate | Причина |
+|-------|---|--------|-----------|--------|------|---------|
+| SNDK  | 12 | +0.348 | 0.000 | +0.411 | full | bias > T1×2=0.24 |
+| NBIS  | 4  | +0.354 | 0.000 | +0.281 | full | bias > T1×2 |
+| ASML  | 11 | -0.260 | 0.000 | -0.343 | full | bias < -T1×2 |
+| MU    | 12 | +0.347 | 0.902 | +0.127 | full | ⚠ REGIME ("War Fears") |
+| LITE  | 8  | +0.426 | 0.000 | +0.502 | full | bias > T1×2 |
+| CIEN  | 3  | +0.547 | 0.000 | +0.652 | full | bias > T1×2 |
+
+Вывод: в активный торговый день с геополитическим стрессом все GAME_5M тикеры имеют достаточно сильный сигнал для FULL. Поведение корректно.
+
+#### PROFILE_CONTEXT (крупные тикеры)
+
+| Тикер | n | avg cs | reg_stress | bias   | gate | Причина |
+|-------|---|--------|-----------|--------|------|---------|
+| ORCL  | 12 | +0.024 | 0.000 | +0.087 | skip | нейтраль, нет REGIME |
+| MSFT  | 12 | -0.100 | 0.927 | -0.143 | full | ⚠ REGIME ("Iran war" в summary) |
+| NVDA  | 12 | -0.029 | 0.951 | -0.085 | full | ⚠ REGIME ("Iran War Heats Up") |
+| META  | 12 | -0.092 | 0.927 | -0.165 | full | ⚠ REGIME (♻ Goldman дубликат) |
+| AMZN  | 12 | +0.138 | 0.927 | +0.181 | full | ⚠ REGIME (♻ Goldman дубликат) |
+
+ORCL → skip: REGIME-статья "How The Iran War Is Reshaping AI Strategy" дала `cs=0.000` → `reg_stress=0.000` → REGIME не активируется. Правильно: стратегическая аналитика без рыночного сентимента.
+
+#### Ключевая находка: дедупликация macro REGIME-статей
+
+Одна статья _"Goldman Sachs Says It's Time to Buy Tech Stocks"_ появилась у **трёх** тикеров (MSFT, META, AMZN). Её `summary` содержит `"Iran war"` → `classify_channel` правильно ставит REGIME для каждого тикера независимо.
+
+**Проблема:** без дедупликации 3 тикера получают FULL по одному и тому же событию → 3 LLM-вызова вместо 1.
+
+**FinBERT диагностика:**
+
+| Вход | cs | Объяснение |
+|------|----|-----------|
+| title only: "Goldman Sachs Says It's Time to Buy Tech Stocks" | +0.000 | нейтральный — FinBERT не уверен без контекста |
+| title + summary (содержит "war", "battering", "worst performance") | −0.941 | правильно: FinBERT видит весь текст |
+| "Nvidia Stock Drops as Iran War Heats Up" | −0.918 | корректно bearish |
+| "Samsung Beats... Defy War Fears" | +0.655 | корректно: beats перевешивает war |
+
+FinBERT читает `article_text()` = `title + "\n" + summary`. cs=-0.927 на Goldman — не баг, это корректный сигнал: статья советует _покупать_, именно потому что война _давит_ рынок.
+
+#### Оптимизация: `MultiTickerGateSession`
+
+Добавлено в `pipeline/draft.py`. Разделяемый `seen_regime_titles: set[str]` предотвращает повторное срабатывание REGIME у дублирующих тикеров.
+
+**Результат на live данных:**
+
+| Тикер | Без сессии | С сессией | Δ |
+|-------|-----------|----------|---|
+| MSFT  | full (regime=0.927) | full (regime=0.927) | — первый в сессии |
+| META  | full (regime=0.927) | **lite** (regime=0.000) | ✓ сэкономлен full |
+| AMZN  | full (regime=0.927) | **lite** (regime=0.000) | ✓ сэкономлен full |
+
+Сэкономлено 2 LLM-вызова из 3. MSFT получает полный анализ как первый обнаруживший событие.
+
+**API:** `session = MultiTickerGateSession(); session.scored(articles)` — прозрачная замена `scored_from_news_articles(articles)`.
+
+#### Применено в коде
+
+- `pipeline/draft.py`: `scored_from_news_articles(..., seen_regime_titles=set)` + `MultiTickerGateSession`
+- `pipeline/__init__.py`: экспорт `MultiTickerGateSession`
+- `tests/unit/test_draft.py`: 4 новых unit-теста (10 total)
+- `tests/integration/test_profile_context_real.py`: 5 integration-тестов
+
 ### Шаблон для следующих прогонов
 
 | Дата | Выборка | T1 | T2 | N | лишние full % | пропуски % | Заметки |
