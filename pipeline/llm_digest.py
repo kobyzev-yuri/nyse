@@ -21,12 +21,14 @@ if __name__ == "__main__" and __package__ is None:
     runpy.run_module("pipeline.llm_digest", run_name="__main__")
     raise SystemExit(0)
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from .cache import FileCache
 
 if TYPE_CHECKING:
     from config_loader import OpenAISettings
 from .llm_cache import cache_key_llm, default_llm_file_cache, get_or_set_llm_text
-from .llm_client import chat_completion_text
+from .llm_factory import get_chat_model
 
 
 def build_digest_messages(
@@ -72,8 +74,15 @@ def run_lite_digest_cached(
     c = cache if cache is not None else default_llm_file_cache()
     ttl = ttl_sec if ttl_sec is not None else config_loader.llm_cache_ttl_sec()
 
+    _llm = get_chat_model(s)
+    lc_messages = [
+        SystemMessage(content=messages[0]["content"]),
+        HumanMessage(content=messages[1]["content"]),
+    ]
+
     def fetcher() -> str:
-        return chat_completion_text(messages, settings=s)
+        resp = _llm.invoke(lc_messages)
+        return resp.content if hasattr(resp, "content") else str(resp)
 
     return get_or_set_llm_text(c, key, ttl, fetcher)
 

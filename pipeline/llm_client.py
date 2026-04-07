@@ -1,10 +1,9 @@
 """
-Этап F: OpenAI-совместимый POST /chat/completions (HTTP через requests).
+[LEGACY] Низкоуровневый HTTP-клиент к OpenAI /chat/completions.
 
-В юнит-тестах сеть не нужна: передайте ``post=...`` (mock) или замокайте ``requests.post``.
-
-Импорт: ``from pipeline.llm_client import chat_completion_text`` (из корня nyse).
-Запуск файла напрямую: ``python -m pipeline.llm_client``.
+Используется только в тестах, которые мокают ``requests.post``.
+Новый код должен использовать ``pipeline.llm_factory.get_chat_model()``
+и LangChain BaseChatModel, как в pystockinvest.
 """
 
 from __future__ import annotations
