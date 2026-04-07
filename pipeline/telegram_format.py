@@ -1,26 +1,39 @@
 """
-Форматирование Trade/TechnicalSignal в сообщения для Telegram.
+Форматирование Trade/TechnicalSignal в HTML-сообщения для Telegram.
 
-Все функции возвращают plain-text строки (без Markdown/HTML разметки Telegram,
-чтобы избежать escape-проблем при специальных символах в summary).
+Все функции возвращают HTML-строки для parse_mode="HTML".
+Динамический контент экранируется через html.escape().
+
+Telegram поддерживает: <b>, <i>, <code>, <pre>, <a href=...>.
 
 Использование::
 
-    from pipeline.telegram_format import format_trade, format_technical_signal
-    text = format_trade(trade, fused_bias=fused)
-    send_to_telegram(text, token=..., chat_id=...)
+    from pipeline.telegram_format import format_trade, format_signal_table
+    text = format_trade(trade, fused=fused)
+    await message.reply_text(text, parse_mode="HTML")
 """
 
 from __future__ import annotations
 
+import html
 from typing import Optional
 
 from domain import Direction, PositionType, TechnicalSignal, Trade
 
 from .trade_builder import FusedBias
 
-# Символы направления (plain-text, без emoji по умолчанию)
-_SIDE_ARROW = {Direction.LONG: "▲ LONG", Direction.SHORT: "▼ SHORT"}
+# Стрелки и эмодзи направлений
+_SIDE_EMOJI = {Direction.LONG: "📈", Direction.SHORT: "📉"}
+_SIDE_LABEL = {Direction.LONG: "LONG",  Direction.SHORT: "SHORT"}
+
+
+def _bias_arrow(b: float) -> str:
+    return "▲" if b > 0.05 else ("▼" if b < -0.05 else "─")
+
+
+def _h(text: str) -> str:
+    """HTML-экранирование динамического контента."""
+    return html.escape(str(text))
 
 
 def format_trade(
@@ -30,124 +43,165 @@ def format_trade(
     include_details: bool = True,
 ) -> str:
     """
-    Полное сообщение о торговом сигнале.
+    Полное HTML-сообщение о торговом сигнале.
 
-    Пример:
+    Пример (рендер):
 
-        ════════════════════════
-        [SNDK]  ▲ LONG  conf=0.76
-        Entry  $717.80
-        TP     $830.40  (+15.7%)
-        SL     $661.50  (-7.8%)
-        ────────────────────────
-        Tech:  bias=+0.35  trend▲  RSI 57  vol calm (ATR=56.30)
-        News:  bias=+0.42  8 items  conf=0.77
-        Fused: tech(+0.19) + news(+0.19) = +0.38
-        ════════════════════════
+        📈 SNDK — LONG   conf 77%
+        ──────────────────────────
+        Entry   $708.46
+        TP      $821.06   +15.9%
+        SL      $652.16   -7.9%
+        ──────────────────────────
+        Tech (55%):  bias +0.26 ▲  RSI 57  ATR 56.30
+        News (45%):  bias +0.44  8 статей  conf 82%
+        Fused:  +0.141 + +0.200 = +0.341
+        ──────────────────────────
+        Technical bias +0.26 (moderate bullish)...
+        Aggregated news bias is 0.44...
     """
-    lines: list[str] = []
-    sep_thick = "=" * 26
-    sep_thin  = "-" * 26
-
-    lines.append(sep_thick)
-
     ticker_val = trade.ticker.value if hasattr(trade.ticker, "value") else str(trade.ticker)
+    lines: list[str] = []
 
     # --- Заголовок ---
     if trade.position is not None:
-        side_str = _SIDE_ARROW.get(trade.position.side, str(trade.position.side))
-        lines.append(f"[{ticker_val}]  {side_str}  conf={trade.position.confidence:.2f}")
+        p    = trade.position
+        emo  = _SIDE_EMOJI.get(p.side, "")
+        side = _SIDE_LABEL.get(p.side, str(p.side))
+        conf_pct = int(p.confidence * 100)
+        lines.append(f"{emo} <b>{_h(ticker_val)} — {side}</b>   conf {conf_pct}%")
     elif trade.entry_type == PositionType.NONE:
-        lines.append(f"[{ticker_val}]  — NO TRADE (confidence/bias below threshold)")
+        lines.append(f"⬜ <b>{_h(ticker_val)}</b>   нет сигнала")
     else:
-        lines.append(f"[{ticker_val}]  {trade.entry_type.value}")
+        lines.append(f"<b>{_h(ticker_val)}</b>   {_h(trade.entry_type.value)}")
 
-    # --- Уровни ---
+    lines.append("─" * 28)
+
+    # --- Уровни входа/TP/SL ---
     if trade.position is not None:
         p = trade.position
-        lines.append(sep_thin)
-        lines.append(f"Entry  ${p.entry:,.2f}")
-        if p.entry > 0:
-            tp_pct = (p.take_profit - p.entry) / p.entry * 100
-            sl_pct = (p.stop_loss  - p.entry) / p.entry * 100
-            lines.append(f"TP     ${p.take_profit:,.2f}  ({tp_pct:+.1f}%)")
-            lines.append(f"SL     ${p.stop_loss:,.2f}  ({sl_pct:+.1f}%)")
+        tp_pct = (p.take_profit - p.entry) / p.entry * 100 if p.entry else 0
+        sl_pct = (p.stop_loss  - p.entry) / p.entry * 100 if p.entry else 0
+        lines.append(f"<code>Entry  ${p.entry:>10,.2f}</code>")
+        lines.append(
+            f"<code>TP     ${p.take_profit:>10,.2f}</code>   "
+            f"<i>{tp_pct:+.1f}%</i>"
+        )
+        lines.append(
+            f"<code>SL     ${p.stop_loss:>10,.2f}</code>   "
+            f"<i>{sl_pct:+.1f}%</i>"
+        )
+        lines.append("─" * 28)
 
     if include_details:
-        lines.append(sep_thin)
+        # --- Числовые параметры ---
+        tech_sig = None
+        try:
+            tech_sig = trade  # для атрибутов ниже используем summary
+        except Exception:
+            pass
 
-        # Tech summary (первые 2 строки)
-        tech_lines = trade.technical_summary[:2]
-        if tech_lines:
-            lines.append(f"Tech:  {tech_lines[0]}")
-            for tl in tech_lines[1:]:
-                lines.append(f"       {tl}")
-
-        # News summary (последняя строка = fusion contrib)
-        if trade.news_summary:
-            news_main = trade.news_summary[0]
-            lines.append(f"News:  {news_main}")
-            # Последняя строка содержит "News fusion contrib: ..."
-            if len(trade.news_summary) > 1:
-                lines.append(f"       {trade.news_summary[-1]}")
-
-        # Fused breakdown
+        # Fusion breakdown
         if fused is not None:
+            arrow = _bias_arrow(fused.value)
             if fused.news_available:
+                t_pct = int(55)
+                n_pct = int(45)
                 lines.append(
-                    f"Fused: tech({fused.tech_contrib:+.3f}) + "
-                    f"news({fused.news_contrib:+.3f}) = {fused.value:+.3f}"
+                    f"<b>Tech</b> ({t_pct}%):  "
+                    f"bias {fused.tech_contrib / 0.55:+.2f} {arrow}"
+                )
+                lines.append(
+                    f"<b>News</b> ({n_pct}%):  "
+                    f"contrib {fused.news_contrib:+.3f}"
+                )
+                lines.append(
+                    f"<b>Fused:</b>  "
+                    f"{fused.tech_contrib:+.3f} + {fused.news_contrib:+.3f} = "
+                    f"<b>{fused.value:+.3f}</b>"
                 )
             else:
                 lines.append(
-                    f"Fused: tech-only  bias={fused.value:+.3f}  (no news signal)"
+                    f"<b>Tech-only:</b>  bias {fused.value:+.3f} {arrow}   "
+                    f"<i>(новостей нет)</i>"
                 )
+            lines.append("─" * 28)
 
-    lines.append(sep_thick)
+        # --- Summary строки ---
+        for line in trade.technical_summary[:2]:
+            lines.append(f"<i>{_h(line)}</i>")
+
+        news_lines = [l for l in trade.news_summary if "fusion contrib" not in l]
+        for line in news_lines[:2]:
+            lines.append(f"<i>{_h(line)}</i>")
+
     return "\n".join(lines)
 
 
-def format_technical_signal(
-    ticker_value: str,
-    sig: TechnicalSignal,
-) -> str:
+def format_technical_signal(ticker_value: str, sig: TechnicalSignal) -> str:
     """
-    Короткий технический снапшот — без news, для отладки/мониторинга.
+    Однострочный технический снапшот — для отладки/мониторинга.
 
     Пример:
-
-        [SNDK] Tech bias=+0.35 ▲  conf=0.78  RSI 57  ATR 56.30
+        [SNDK]  bias +0.21 ▲  conf 70%  RSI 57  $704.76
     """
-    price = sig.target_snapshot.data.current_price
-    atr   = sig.target_snapshot.metrics.atr
-    rsi   = sig.target_snapshot.metrics.rsi_14
-    arrow = "▲" if sig.bias > 0.05 else ("▼" if sig.bias < -0.05 else "─")
+    price   = sig.target_snapshot.data.current_price
+    rsi     = sig.target_snapshot.metrics.rsi_14
+    arrow   = _bias_arrow(sig.bias)
+    conf_pct = int(sig.confidence * 100)
     return (
-        f"[{ticker_value}] Tech bias={sig.bias:+.2f} {arrow}  "
-        f"conf={sig.confidence:.2f}  "
-        f"RSI {rsi:.0f}  ATR {atr:.2f}  "
-        f"price ${price:,.2f}"
+        f"[{_h(ticker_value)}]  "
+        f"bias {sig.bias:+.2f} {arrow}  "
+        f"conf {conf_pct}%  "
+        f"RSI {rsi:.0f}  "
+        f"${price:,.2f}"
     )
 
 
 def format_signal_table(signals: list[tuple[str, TechnicalSignal]]) -> str:
     """
-    Таблица технических сигналов по нескольким тикерам.
+    Компактная таблица технических сигналов (plain text — для вставки в <pre>).
 
     Пример:
-        SNDK   $717.80  bias=+0.35 ▲  conf=0.78  RSI 57
-        NBIS   $116.14  bias=+0.39 ▲  conf=0.79  RSI 56
-        ASML  $1297.36  bias=-0.35 ▼  conf=0.81  RSI 43
+        SNDK   $  704.76  +0.21 ▲  70%  RSI 57
+        NBIS   $  116.79  +0.45 ▲  81%  RSI 57
+        ASML   $1,297.46  -0.36 ▼  78%  RSI 44
     """
     lines = []
     for ticker_val, sig in signals:
-        price = sig.target_snapshot.data.current_price
-        rsi   = sig.target_snapshot.metrics.rsi_14
-        arrow = "▲" if sig.bias > 0.05 else ("▼" if sig.bias < -0.05 else "─")
+        price   = sig.target_snapshot.data.current_price
+        rsi     = sig.target_snapshot.metrics.rsi_14
+        arrow   = "▲" if sig.bias > 0.05 else ("▼" if sig.bias < -0.05 else "─")
+        conf_pct = int(sig.confidence * 100)
         lines.append(
-            f"{ticker_val:6s}  ${price:>8,.2f}  "
-            f"bias={sig.bias:+.2f} {arrow}  "
-            f"conf={sig.confidence:.2f}  "
+            f"{ticker_val:6s}  ${price:>9,.2f}  "
+            f"{sig.bias:+.2f} {arrow}  "
+            f"{conf_pct:>2d}%  "
             f"RSI {rsi:.0f}"
         )
+    return "\n".join(lines)
+
+
+def format_news_list(ticker_val: str, articles: list) -> str:
+    """
+    HTML-список статей с cheap_sentiment и каналом.
+
+    Parameters
+    ----------
+    articles : список NewsArticle с заполненным cheap_sentiment и методом title/summary.
+    """
+    from pipeline.channels import classify_channel
+
+    lines = [f"📰 <b>{_h(ticker_val)} — новости (48 ч)</b>\n"]
+    for a in articles[:10]:
+        score = a.cheap_sentiment or 0.0
+        ch    = classify_channel(a.title, getattr(a, "summary", None))[0].value[:3].upper()
+        bar   = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
+        # Цветовой код канала
+        ch_tag = f"<code>{ch}</code>"
+        score_str = f"<i>{score:+.2f}</i>"
+        title = _h(a.title[:80])
+        lines.append(f"{bar} {ch_tag} {title}")
+        lines.append(f"    {score_str}")
+
     return "\n".join(lines)

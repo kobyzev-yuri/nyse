@@ -57,14 +57,10 @@ def _make_ticker(raw: str):
         raise ValueError(f"Неизвестный тикер: {raw.upper()}")
 
 
-def _escape_md(text: str) -> str:
-    """Экранирует символы Telegram Markdown v1: * _ [ ] `"""
-    if not text:
-        return ""
-    s = str(text)
-    for c in ("\\", "_", "*", "[", "]", "`"):
-        s = s.replace(c, "\\" + c)
-    return s
+def _h(text: str) -> str:
+    """HTML-экранирование для безопасной вставки динамического контента."""
+    import html
+    return html.escape(str(text))
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +149,8 @@ def _worker_scan() -> str:
     if not pairs:
         return "Нет сигналов."
 
-    header = "📊 *GAME\\_5M — технический снапшот*\n\n"
-    return header + f"```\n{format_signal_table(pairs)}\n```"
+    header = "📊 <b>GAME_5M — технический снапшот</b>\n\n"
+    return header + f"<pre>{format_signal_table(pairs)}</pre>"
 
 
 def _worker_signal(ticker_str: str) -> str:
@@ -247,36 +243,23 @@ def _worker_signal(ticker_str: str) -> str:
 def _worker_news(ticker_str: str) -> str:
     """
     Заголовки за 48 ч + cheap_sentiment (FinBERT / API / price_pattern_boost)
-    для тикера → сообщение для Telegram.
+    для тикера → HTML-сообщение для Telegram.
 
-    cheap_sentiment: число [-1, 1]:
-        > +0.05  → ▲ позитив
-        < -0.05  → ▼ негатив
-        иначе    → ■ нейтраль
+    cheap_sentiment [-1, 1]:  > +0.05 → ▲,  < -0.05 → ▼,  иначе → ■
     Канал: INC (incremental) / REG (regime-macro) / POL (policy/rates).
     """
     from sources.news import Source as NewsSource
     from pipeline.sentiment import enrich_cheap_sentiment
-    from pipeline import classify_channel
+    from pipeline.telegram_format import format_news_list
 
     ticker   = _make_ticker(ticker_str)
     articles = NewsSource(max_per_ticker=10, lookback_hours=48).get_articles([ticker])
     articles = [a for a in articles if a.ticker == ticker]
     if not articles:
-        return f"Новостей для {ticker_str.upper()} не найдено."
+        return f"Новостей для <b>{_h(ticker_str.upper())}</b> не найдено."
 
     articles = enrich_cheap_sentiment(articles)
-
-    lines = [f"📰 *{ticker_str.upper()} — новости (48 ч)*\n"]
-    for a in articles[:10]:
-        score = a.cheap_sentiment or 0.0
-        ch    = classify_channel(a.title, getattr(a, "summary", None))[0].value[:3].upper()
-        bar   = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
-        title = _escape_md(a.title[:80])
-        lines.append(f"{bar} [{ch}] {title}")
-        lines.append(f"   score={score:+.2f}")
-
-    return "\n".join(lines)
+    return format_news_list(ticker_str.upper(), articles)
 
 
 def _worker_status() -> str:
@@ -302,7 +285,7 @@ def _worker_status() -> str:
     else:
         status = "🔴 Закрыто (постмаркет)"
 
-    return f"🏛 *NYSE статус*\n{status}\n{time_str}"
+    return f"🏛 <b>NYSE статус</b>\n{status}\n<code>{time_str}</code>"
 
 
 # ---------------------------------------------------------------------------
@@ -320,11 +303,11 @@ async def _send_thinking(update: Update) -> None:
 
 
 async def _reply(update: Update, text: str) -> None:
-    """Отправляет сообщение с Markdown; длинные разбивает на части по 4000 символов."""
+    """Отправляет HTML-сообщение; длинные разбивает на части по 4000 символов."""
     MAX    = 4000
     chunks = [text[i:i + MAX] for i in range(0, len(text), MAX)] if len(text) > MAX else [text]
     for chunk in chunks:
-        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
 
 
 async def _reply_error(update: Update, text: str) -> None:
@@ -338,29 +321,29 @@ async def _reply_error(update: Update, text: str) -> None:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "👋 *NYSE Signal Bot*\n\n"
+        "👋 <b>NYSE Signal Bot</b>\n\n"
         "Анализирует рынок: технический анализ + новостной пайплайн.\n\n"
         "Используй /help для списка команд."
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "📖 *Команды*\n\n"
-        "/signal `TICKER` — полный сигнал (tech + news → Trade)\n"
-        "   _Пример:_ `/signal SNDK`\n\n"
-        "/scan — снапшот всех GAME\\_5M тикеров (техника)\n\n"
-        "/news `TICKER` — заголовки + FinBERT за 48 ч\n"
-        "   _Пример:_ `/news MU`\n\n"
+        "📖 <b>Команды</b>\n\n"
+        "/signal <code>TICKER</code> — полный сигнал (tech + news → Trade)\n"
+        "   <i>Пример:</i> <code>/signal SNDK</code>\n\n"
+        "/scan — снапшот всех GAME_5M тикеров (техника)\n\n"
+        "/news <code>TICKER</code> — заголовки + FinBERT за 48 ч\n"
+        "   <i>Пример:</i> <code>/news MU</code>\n\n"
         "/status — статус NYSE (открыто / закрыто)\n\n"
         "/help — это сообщение\n\n"
         "──────────────────\n"
-        "GAME\\_5M тикеры: SNDK, NBIS, ASML, MU, LITE, CIEN\n"
-        "Технический агент: LseHeuristicAgent\n"
-        "Новостной pipeline: FinBERT → Gate → LLM (если нужно)"
+        "<b>GAME_5M тикеры:</b> SNDK, NBIS, ASML, MU, LITE, CIEN\n"
+        "<b>Техника:</b> LseHeuristicAgent\n"
+        "<b>Новости:</b> FinBERT → Gate → LLM (если нужно)"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -376,7 +359,7 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
-        await update.message.reply_text("Укажи тикер: `/signal SNDK`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Укажи тикер: <code>/signal SNDK</code>", parse_mode=ParseMode.HTML)
         return
     ticker_str = args[0].upper()
     await _send_thinking(update)
@@ -393,7 +376,7 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
     if not args:
-        await update.message.reply_text("Укажи тикер: `/news MU`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Укажи тикер: <code>/news MU</code>", parse_mode=ParseMode.HTML)
         return
     ticker_str = args[0].upper()
     await _send_thinking(update)

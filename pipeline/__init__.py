@@ -16,7 +16,7 @@ from .calendar_context import build_gate_context, calendar_high_soon
 from .gates import decide_llm_mode
 from .ingest import merge_news_articles, with_normalized_link
 from .trade_builder import FusedBias, TradeBuilder, neutral_calendar_signal
-from .telegram_format import format_trade, format_technical_signal, format_signal_table
+from .telegram_format import format_trade, format_technical_signal, format_signal_table, format_news_list
 from .sentiment import (
     article_text,
     enrich_cheap_sentiment,
@@ -65,6 +65,7 @@ __all__ = [
     "format_trade",
     "format_technical_signal",
     "format_signal_table",
+    "format_news_list",
     "DraftImpulse",
     "GateContext",
     "LLMMode",
