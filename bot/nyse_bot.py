@@ -263,7 +263,7 @@ def _worker_news(ticker_str: str) -> str:
 
 
 def _worker_status() -> str:
-    """Статус NYSE (open/closed) + текущее время ET."""
+    """Статус торговой сессии NYSE/NASDAQ + текущее время ET."""
     from datetime import datetime, timezone, timedelta
 
     # EDT (UTC-4) действует апрель–октябрь; зимой EST (UTC-5).
@@ -273,19 +273,33 @@ def _worker_status() -> str:
     hour   = now_et.hour
     minute = now_et.minute
 
-    time_str = now_et.strftime("%H:%M ET, %a %b %d")
+    time_str = now_et.strftime("%H:%M ET  ·  %a %d %b %Y")
 
     if now_et.weekday() >= 5:
-        status = "🔴 Закрыто (выходной)"
+        status = "🔴 <b>Закрыто</b> — выходной"
+        detail = "Торги пн–пт, 09:30–16:00 ET"
     elif (hour, minute) >= (9, 30) and (hour, minute) < (16, 0):
-        status = "🟢 Открыто"
+        mins_left = (16 * 60) - (hour * 60 + minute)
+        status = f"🟢 <b>Основная сессия</b> — закроется через {mins_left} мин"
+        detail = "NYSE/NASDAQ regular hours · 09:30–16:00 ET"
+    elif (hour, minute) < (4, 0):
+        status = "🔴 <b>Закрыто</b> — ночь"
+        detail = "Премаркет начнётся в 04:00 ET"
     elif (hour, minute) < (9, 30):
         mins_to_open = (9 * 60 + 30) - (hour * 60 + minute)
-        status = f"🟡 Предрынок (откроется через {mins_to_open} мин)"
+        status = f"🟡 <b>Премаркет</b> — основная сессия через {mins_to_open} мин"
+        detail = "Ограниченная ликвидность · 04:00–09:30 ET"
     else:
-        status = "🔴 Закрыто (постмаркет)"
+        mins_since = (hour * 60 + minute) - (16 * 60)
+        status = f"🟠 <b>Постмаркет</b> — {mins_since} мин после закрытия"
+        detail = "Ограниченная ликвидность · 16:00–20:00 ET"
 
-    return f"🏛 <b>NYSE статус</b>\n{status}\n<code>{time_str}</code>"
+    return (
+        f"🏛 <b>NYSE/NASDAQ — торговая сессия</b>\n\n"
+        f"{status}\n"
+        f"<i>{detail}</i>\n\n"
+        f"<code>{time_str}</code>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,18 +344,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "📖 <b>Команды</b>\n\n"
-        "/signal <code>TICKER</code> — полный сигнал (tech + news → Trade)\n"
-        "   <i>Пример:</i> <code>/signal SNDK</code>\n\n"
-        "/scan — снапшот всех GAME_5M тикеров (техника)\n\n"
-        "/news <code>TICKER</code> — заголовки + FinBERT за 48 ч\n"
-        "   <i>Пример:</i> <code>/news MU</code>\n\n"
-        "/status — статус NYSE (открыто / закрыто)\n\n"
-        "/help — это сообщение\n\n"
+        "📖 <b>Команды бота</b>\n\n"
+
+        "📈 /signal <code>TICKER</code>\n"
+        "Полный торговый сигнал по тикеру: технический анализ + "
+        "новостной пайплайн (FinBERT → LLM) → Entry/TP/SL.\n"
+        "<i>Пример: /signal SNDK</i>\n\n"
+
+        "📊 /scan\n"
+        "Быстрый снапшот всех GAME_5M тикеров: цена, bias, RSI.\n"
+        "Без LLM, только технический агент (~10 сек).\n\n"
+
+        "📰 /news <code>TICKER</code>\n"
+        "Последние заголовки за 48 ч с FinBERT-сентиментом.\n"
+        "▲ позитив  ■ нейтраль  ▼ негатив\n"
+        "<i>Каналы: INC = корп. новость, REG = макро/режим, POL = ставки</i>\n"
+        "<i>Пример: /news MU</i>\n\n"
+
+        "🏛 /status\n"
+        "Статус торговой сессии NYSE/NASDAQ и текущее время ET.\n\n"
+
         "──────────────────\n"
-        "<b>GAME_5M тикеры:</b> SNDK, NBIS, ASML, MU, LITE, CIEN\n"
-        "<b>Техника:</b> LseHeuristicAgent\n"
-        "<b>Новости:</b> FinBERT → Gate → LLM (если нужно)"
+        "<b>Тикеры GAME_5M:</b> SNDK, NBIS, ASML, MU, LITE, CIEN\n"
+        "<b>Контекст:</b> SMH, QQQ (не торгуются, используются для market alignment)\n\n"
+        "<b>Pipeline:</b>\n"
+        "  L2 FinBERT → L3 DraftImpulse → L4 Gate → L5 LLM → L6 Trade"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
