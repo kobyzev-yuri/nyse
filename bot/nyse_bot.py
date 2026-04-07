@@ -23,8 +23,9 @@ import asyncio
 import logging
 import sys
 from functools import partial
+from io import BytesIO
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 # Подключаем корень nyse в sys.path при прямом запуске из scripts/
 _ROOT = Path(__file__).resolve().parent.parent
@@ -116,14 +117,17 @@ def _load_market_data(fetch: list) -> Tuple[dict, list]:
 # Синхронные воркеры (запускаются в thread executor чтобы не блокировать loop)
 # ---------------------------------------------------------------------------
 
-def _worker_scan() -> str:
+def _worker_scan() -> Tuple[str, str]:
     """
-    Технический снапшот всех GAME_5M тикеров → строка для Telegram.
+    Технический снапшот всех GAME_5M тикеров.
 
-    Использует LseHeuristicAgent для всех тикеров и форматирует таблицу.
+    Returns
+    -------
+    (short_text, html_content) — текст для чата и HTML-отчёт для reply_document.
     """
     from pipeline.technical import LseHeuristicAgent
     from pipeline import format_signal_table
+    from pipeline.html_report import build_scan_html
 
     game5m  = config_loader.get_game5m_tickers()
     context = config_loader.get_game5m_context_tickers()
@@ -131,7 +135,7 @@ def _worker_scan() -> str:
 
     ticker_data, metrics_list = _load_market_data(fetch)
     if not ticker_data:
-        return "yfinance не вернул данных."
+        return "yfinance не вернул данных.", ""
 
     # KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
     #   from pystockinvest.agent.market.agent import Agent as KerimsAgent
@@ -149,22 +153,27 @@ def _worker_scan() -> str:
         pairs.append((t.value, sig))
 
     if not pairs:
-        return "Нет сигналов."
+        return "Нет сигналов.", ""
 
-    header = "📊 <b>GAME_5M — технический снапшот</b>\n\n"
-    return header + f"<pre>{format_signal_table(pairs)}</pre>"
+    short = "📊 <b>GAME_5M — технический снапшот</b>\n\n" + f"<pre>{format_signal_table(pairs)}</pre>"
+    html  = build_scan_html([(t, s) for t, s in pairs])
+    return short, html
 
 
-def _worker_signal(ticker_str: str) -> str:
+def _worker_signal(ticker_str: str) -> Tuple[str, str]:
     """
-    Полный pipeline L0-L6 для одного тикера → сообщение для Telegram.
+    Полный pipeline L0-L6 для одного тикера.
 
     Уровни:
         L0-L1  yfinance + Finviz → TickerData, TickerMetrics
         L2     LseHeuristicAgent → TechnicalSignal
         L3-L4  Yahoo News → FinBERT → DraftImpulse → Gate (SKIP/LITE/FULL)
         L5     LLM (если gate=FULL/LITE) → AggregatedNewsSignal
-        L6     TradeBuilder → Trade → format_trade
+        L6     TradeBuilder → Trade
+
+    Returns
+    -------
+    (short_text, html_content) — краткое сообщение в чат + HTML-отчёт для reply_document.
     """
     from domain import SignalBundle, TickerData  # noqa: F401 (TickerData нужен _load_market_data)
     from sources.news import Source as NewsSource
@@ -177,6 +186,7 @@ def _worker_signal(ticker_str: str) -> str:
         TradeBuilder, neutral_calendar_signal,
         format_trade, run_news_signal_pipeline,
     )
+    from pipeline.html_report import build_signal_html
 
     ticker = _make_ticker(ticker_str)
 
@@ -186,7 +196,7 @@ def _worker_signal(ticker_str: str) -> str:
 
     ticker_data, metrics_list = _load_market_data(fetch)
     if ticker not in ticker_data:
-        return f"Нет данных yfinance для {ticker_str.upper()}."
+        return f"Нет данных yfinance для {ticker_str.upper()}.", ""
 
     # --- L2: технический сигнал ---
     # KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
@@ -239,29 +249,86 @@ def _worker_signal(ticker_str: str) -> str:
     trade   = builder.build(bundle)
     fused   = builder.fuse_bias(sig, news_signal)
 
-    return format_trade(trade, fused=fused, include_details=True)
+    short_text = format_trade(trade, fused=fused, include_details=True)
+    html_content = build_signal_html(trade, fused=fused, articles=articles)
+    return short_text, html_content
 
 
-def _worker_news(ticker_str: str) -> str:
+def _worker_news(ticker_str: str) -> Tuple[str, str]:
     """
-    Заголовки за 48 ч + cheap_sentiment (FinBERT / API / price_pattern_boost)
-    для тикера → HTML-сообщение для Telegram.
+    Заголовки за 48 ч + cheap_sentiment (FinBERT / API / price_pattern_boost).
 
     cheap_sentiment [-1, 1]:  > +0.05 → ▲,  < -0.05 → ▼,  иначе → ■
     Канал: INC (incremental) / REG (regime-macro) / POL (policy/rates).
+
+    Returns
+    -------
+    (short_text, html_content) — краткий список в чате + полный HTML-отчёт.
     """
     from sources.news import Source as NewsSource
     from pipeline.sentiment import enrich_cheap_sentiment
     from pipeline.telegram_format import format_news_list
+    from pipeline.html_report import build_news_html
 
     ticker   = _make_ticker(ticker_str)
     articles = NewsSource(max_per_ticker=10, lookback_hours=48).get_articles([ticker])
     articles = [a for a in articles if a.ticker == ticker]
     if not articles:
-        return f"Новостей для <b>{_h(ticker_str.upper())}</b> не найдено."
+        return f"Новостей для <b>{_h(ticker_str.upper())}</b> не найдено.", ""
 
     articles = enrich_cheap_sentiment(articles)
-    return format_news_list(ticker_str.upper(), articles)
+    short_text   = format_news_list(ticker_str.upper(), articles)
+    html_content = build_news_html(ticker_str.upper(), articles)
+    return short_text, html_content
+
+
+def _worker_news_signal(ticker_str: str) -> Tuple[str, str]:
+    """
+    Полный debug-прогон pipeline L0–L6 → подробный HTML-отчёт.
+
+    В чат — одна строка; весь анализ — в HTML-документе (7 секций).
+    """
+    from pipeline.debug_runner import run_debug_pipeline
+    from pipeline.html_report import build_debug_report_html
+
+    ticker = _make_ticker(ticker_str)
+
+    game5m  = config_loader.get_game5m_tickers()
+    context = config_loader.get_game5m_context_tickers()
+    fetch   = list(set(game5m + context))
+
+    ticker_data, metrics_list = _load_market_data(fetch)
+    if ticker not in ticker_data:
+        return f"Нет данных yfinance для {ticker_str.upper()}.", ""
+
+    oai = config_loader.get_openai_settings()
+    trace = run_debug_pipeline(
+        ticker,
+        ticker_data,
+        metrics_list,
+        settings=oai,
+    )
+
+    html_content = build_debug_report_html(trace)
+
+    p = trace.trade.position
+    if p is not None:
+        side = "▲ LONG" if p.side.value == "long" else "▼ SHORT"
+        short = (
+            f"🔬 <b>Debug pipeline: {_h(ticker_str.upper())}</b>\n"
+            f"{side}  Entry ${p.entry:,.2f} · TP {(p.take_profit-p.entry)/p.entry*100:+.1f}%"
+            f" · SL {(p.stop_loss-p.entry)/p.entry*100:+.1f}%\n"
+            f"Fused {trace.fused.value:+.3f} · Gate <b>{trace.llm_mode.upper()}</b>\n"
+            f"📎 Детальный отчёт — в документе"
+        )
+    else:
+        short = (
+            f"🔬 <b>Debug pipeline: {_h(ticker_str.upper())}</b>\n"
+            f"NO TRADE · Fused {trace.fused.value:+.3f} · Gate <b>{trace.llm_mode.upper()}</b>\n"
+            f"📎 Детальный отчёт — в документе"
+        )
+
+    return short, html_content
 
 
 def _worker_status() -> str:
@@ -334,6 +401,24 @@ async def _reply_error(update: Update, text: str) -> None:
     await update.message.reply_text(text)
 
 
+async def _reply_document(update: Update, html_content: str, filename: str) -> None:
+    """
+    Отправляет HTML-контент как документ (открывается в браузере).
+    Молча пропускает если html_content пустой.
+    """
+    if not html_content:
+        return
+    try:
+        buf = BytesIO(html_content.encode("utf-8"))
+        await update.message.reply_document(
+            document=buf,
+            filename=filename,
+            caption="📎 Откройте файл в браузере для удобного просмотра",
+        )
+    except Exception as exc:
+        log.warning("Не удалось отправить HTML-файл %s: %s", filename, exc)
+
+
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
@@ -352,19 +437,25 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📖 <b>Команды бота</b>\n\n"
 
         "📈 /signal <code>TICKER</code>\n"
-        "Полный торговый сигнал по тикеру: технический анализ + "
-        "новостной пайплайн (FinBERT → LLM) → Entry/TP/SL.\n"
+        "Полный торговый сигнал: технический агент + FinBERT + LLM → Entry/TP/SL.\n"
+        "В чате — краткое резюме; HTML-отчёт со всеми деталями — в документе.\n"
         "<i>Пример: /signal SNDK</i>\n\n"
 
         "📊 /scan\n"
-        "Быстрый снапшот всех GAME_5M тикеров: цена, bias, RSI.\n"
-        "Без LLM, только технический агент (~10 сек).\n\n"
+        "Снапшот всех GAME_5M тикеров: цена, bias, RSI (~10 сек, без LLM).\n"
+        "HTML-таблица — в документе.\n\n"
 
         "📰 /news <code>TICKER</code>\n"
-        "Последние заголовки за 48 ч с FinBERT-сентиментом.\n"
+        "Заголовки за 48 ч с FinBERT-сентиментом.\n"
         "▲ позитив  ■ нейтраль  ▼ негатив\n"
-        "<i>Каналы: INC = корп. новость, REG = макро/режим, POL = ставки</i>\n"
+        "<i>Каналы: INC = корп., REG = макро, POL = ставки · HTML-детали — в документе</i>\n"
         "<i>Пример: /news MU</i>\n\n"
+
+        "🔬 /news_signal <code>TICKER</code>\n"
+        "Debug-прогон всего pipeline L0–L6 с захватом промежуточных данных.\n"
+        "HTML-отчёт: ① Trade · ② Fusion · ③ Tech scores · ④ Articles · "
+        "⑤ DraftImpulse · ⑥ Gate · ⑦ LLM signal\n"
+        "<i>Пример: /news_signal SNDK</i>\n\n"
 
         "🏛 /status\n"
         "Статус торговой сессии NYSE/NASDAQ и текущее время ET.\n\n"
@@ -381,8 +472,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_thinking(update)
     try:
-        result = await _run_in_thread(_worker_scan)
-        await _reply(update, result)
+        from datetime import datetime
+        short, html = await _run_in_thread(_worker_scan)
+        await _reply(update, short)
+        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+        await _reply_document(update, html, f"scan_{ts}.html")
     except Exception as exc:
         log.exception("scan error")
         await _reply_error(update, f"❌ Ошибка: {exc}")
@@ -396,8 +490,11 @@ async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     ticker_str = args[0].upper()
     await _send_thinking(update)
     try:
-        result = await _run_in_thread(_worker_signal, ticker_str)
-        await _reply(update, result)
+        from datetime import datetime
+        short, html = await _run_in_thread(_worker_signal, ticker_str)
+        await _reply(update, short)
+        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+        await _reply_document(update, html, f"signal_{ticker_str}_{ts}.html")
     except ValueError as exc:
         await _reply_error(update, f"❌ {exc}")
     except Exception as exc:
@@ -413,12 +510,37 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ticker_str = args[0].upper()
     await _send_thinking(update)
     try:
-        result = await _run_in_thread(_worker_news, ticker_str)
-        await _reply(update, result)
+        from datetime import datetime
+        short, html = await _run_in_thread(_worker_news, ticker_str)
+        await _reply(update, short)
+        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+        await _reply_document(update, html, f"news_{ticker_str}_{ts}.html")
     except ValueError as exc:
         await _reply_error(update, f"❌ {exc}")
     except Exception as exc:
         log.exception("news error for %s", ticker_str)
+        await _reply_error(update, f"❌ Ошибка: {exc}")
+
+
+async def cmd_news_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Укажи тикер: <code>/news_signal SNDK</code>", parse_mode=ParseMode.HTML
+        )
+        return
+    ticker_str = args[0].upper()
+    await _send_thinking(update)
+    try:
+        from datetime import datetime
+        short, html = await _run_in_thread(_worker_news_signal, ticker_str)
+        await _reply(update, short)
+        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+        await _reply_document(update, html, f"debug_{ticker_str}_{ts}.html")
+    except ValueError as exc:
+        await _reply_error(update, f"❌ {exc}")
+    except Exception as exc:
+        log.exception("news_signal error for %s", ticker_str)
         await _reply_error(update, f"❌ Ошибка: {exc}")
 
 
@@ -470,11 +592,12 @@ def build_application(token: str, proxy: Optional[str] = None) -> Application:
         .get_updates_request(get_updates_request)
     )
     app = builder.build()
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("help",   cmd_help))
-    app.add_handler(CommandHandler("scan",   cmd_scan))
-    app.add_handler(CommandHandler("signal", cmd_signal))
-    app.add_handler(CommandHandler("news",   cmd_news))
-    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("start",       cmd_start))
+    app.add_handler(CommandHandler("help",        cmd_help))
+    app.add_handler(CommandHandler("scan",        cmd_scan))
+    app.add_handler(CommandHandler("signal",      cmd_signal))
+    app.add_handler(CommandHandler("news",        cmd_news))
+    app.add_handler(CommandHandler("news_signal", cmd_news_signal))
+    app.add_handler(CommandHandler("status",      cmd_status))
     app.add_error_handler(error_handler)
     return app
