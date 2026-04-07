@@ -383,3 +383,10 @@ python scripts/calibrate_gate.py --t1 0.15 --max-n 10 --tickers SNDK MU --days 7
 | G+ | ♻ | Калибровка на реальных ценовых движениях |
 
 Детали — `docs/news_sources_testing_and_pipeline_roadmap.md`.
+
+---
+
+## Как это работает — своими словами
+
+Подробное описание каждого уровня пайплайна на русском, без кода:  
+→ **[docs/СвоимиСловами.md](docs/СвоимиСловами.md)**
