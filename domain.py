@@ -1,7 +1,7 @@
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 
 # --------- Ticker ----------
@@ -164,5 +164,117 @@ class AggregatedNewsSignal:
 
     bias: float
     confidence: float
-    summary: list[str]
-    items: list[NewsSignal]
+    summary: List[str]
+    items: List[NewsSignal]
+
+
+# --------- Level 6: technical signal, calendar signal, trade output ---------
+# Контракт полей идентичен pystockinvest/agent/models.py и pystockinvest/domain.py,
+# чтобы при слиянии репозиториев diff был минимальным.
+
+# --- TickerData (свечи + текущая цена) ---
+
+@dataclass
+class TickerData:
+    ticker: Ticker
+    current_price: float
+    daily_candles: List[Candle]
+    hourly_candles: List[Candle]
+
+
+@dataclass(frozen=True)
+class TechnicalSnapshot:
+    """Срез данных для одного тикера: цены + метрики."""
+    data: TickerData
+    metrics: TickerMetrics
+
+
+# --- TechnicalSignal (выход TechnicalAgent) ---
+
+@dataclass
+class TechnicalSignal:
+    """
+    Технический сигнал на 1-3 торговых дня.
+    Поля и формула bias идентичны pystockinvest/agent/models.py.
+    """
+    bias: float                         # [-1, 1]: взвешенная сумма score-полей
+    trend_score: float                  # [-1, 1]: направление краткосрочного тренда
+    momentum_score: float               # [-1, 1]: сила и качество импульса
+    mean_reversion_score: float         # [-1, 1]: ожидание отката/разворота
+    breakout_score: float               # [-1, 1]: давление пробоя/пробития
+    volatility_regime: float            # [0, 1]:  0=спокойно, 1=высокая волатильность
+    relative_strength_score: float      # [-1, 1]: сила тикера относительно рынка/сектора
+    market_alignment_score: float       # [-1, 1]: согласованность с широким рынком
+    exhaustion_score: float             # [0, 1]:  0=не перегрет, 1=исчерпан
+    support_resistance_pressure: float  # [-1, 1]: +1=поддержка снизу, -1=сопротивление сверху
+    tradeability_score: float           # [0, 1]:  качество сетапа для входа
+    confidence: float                   # [0, 1]:  уверенность агента
+    target_snapshot: TechnicalSnapshot
+    summary: List[str]
+
+
+# --- CalendarSignal (выход CalendarAgent) ---
+
+@dataclass
+class CalendarSignal:
+    """
+    Макро-сигнал из экономического календаря.
+    Поля идентичны pystockinvest/agent/models.py.
+    """
+    broad_equity_bias: float        # [-1, 1]: общий фон для акций по событиям
+    rates_pressure: float           # [0, 1]:  давление на ставки (CPI, FOMC)
+    macro_volatility_risk: float    # [0, 1]:  риск макро-волатильности
+    upcoming_event_risk: float      # [0, 1]:  риск от ближайших HIGH-событий
+    inflation_score: float          # [-1, 1]: инфляционное давление
+    employment_score: float         # [-1, 1]: сигнал по занятости
+    economic_activity_score: float  # [-1, 1]: активность экономики
+    central_bank_score: float       # [-1, 1]: сигнал от центробанков
+    confidence: float               # [0, 1]
+    summary: List[str]
+
+
+# --- Trade output (выход TradeBuilder) ---
+
+class Direction(enum.Enum):
+    LONG = "long"
+    SHORT = "short"
+
+
+class PositionType(enum.Enum):
+    MARKET = "market"
+    LIMIT = "limit"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class Position:
+    side: Direction
+    entry: float
+    take_profit: float
+    stop_loss: float
+    confidence: float
+
+
+@dataclass
+class Trade:
+    """
+    Итоговое торговое решение после слияния всех трёх агентов.
+    Структура идентична pystockinvest/domain.py.
+    """
+    ticker: Ticker
+    entry_type: PositionType
+    position: Optional[Position]
+    technical_summary: List[str]
+    news_summary: List[str]
+    calendar_summary: List[str]
+
+
+# --- SignalBundle (вход TradeBuilder) ---
+
+@dataclass(frozen=True)
+class SignalBundle:
+    """Три сигнала для одного тикера — вход в TradeBuilder."""
+    ticker: Ticker
+    technical_signal: TechnicalSignal
+    news_signal: Optional[AggregatedNewsSignal]
+    calendar_signal: CalendarSignal
