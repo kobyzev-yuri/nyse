@@ -33,7 +33,9 @@ if str(_ROOT) not in sys.path:
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import TimedOut, NetworkError
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.request import HTTPXRequest
 
 import config_loader
 
@@ -313,7 +315,10 @@ async def _run_in_thread(func, *args):
 
 
 async def _send_thinking(update: Update) -> None:
-    await update.message.reply_text("⏳ Считаю…")
+    try:
+        await update.message.reply_text("⏳ Считаю…")
+    except Exception:
+        pass  # не критично — просто не покажем "считаю"
 
 
 async def _reply(update: Update, text: str) -> None:
@@ -429,12 +434,41 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # Application factory
 # ---------------------------------------------------------------------------
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Логирует сетевые ошибки без краша бота."""
+    err = context.error
+    if isinstance(err, (TimedOut, NetworkError)):
+        log.warning("Telegram network error (transient): %s", err)
+    else:
+        log.exception("Unhandled error: %s", err)
+
+
 def build_application(token: str, proxy: Optional[str] = None) -> Application:
     """Собирает PTB Application с хендлерами команд и опциональным прокси."""
-    builder = Application.builder().token(token)
+    # Увеличиваем таймауты для работы через SOCKS5 прокси
+    request = HTTPXRequest(
+        proxy=proxy,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=15,
+        pool_timeout=10,
+    )
+    get_updates_request = HTTPXRequest(
+        proxy=proxy,
+        read_timeout=40,   # long-polling держит соединение ~30 сек
+        write_timeout=30,
+        connect_timeout=15,
+        pool_timeout=10,
+    )
     if proxy:
-        builder = builder.proxy(proxy).get_updates_proxy(proxy)
         log.info("Telegram proxy: %s", proxy)
+
+    builder = (
+        Application.builder()
+        .token(token)
+        .request(request)
+        .get_updates_request(get_updates_request)
+    )
     app = builder.build()
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("help",   cmd_help))
@@ -442,4 +476,5 @@ def build_application(token: str, proxy: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("signal", cmd_signal))
     app.add_handler(CommandHandler("news",   cmd_news))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_error_handler(error_handler)
     return app
