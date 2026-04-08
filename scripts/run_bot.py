@@ -31,6 +31,9 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
+# httpx/httpcore на INFO пишут полный URL каждого запроса к api.telegram.org — в нём токен бота.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("run_bot")
 
 from bot.nyse_bot import build_application
