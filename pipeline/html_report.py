@@ -151,6 +151,89 @@ def _debug_auto_analysis_html(t) -> str:
     )
 
 
+def _debug_calendar_macro_html(t) -> str:
+    """
+    Макро-события из того же источника, что и гейт (ecalendar).
+    Объясняет, почему во fusion Calendar может быть 0 при наличии строк в таблице.
+    """
+    from datetime import timezone
+
+    import config_loader
+    from domain import CalendarEventImportance
+
+    def _utc(dt):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    config_loader.load_config_env()
+    mb = config_loader.calendar_high_before_minutes()
+    ma = config_loader.calendar_high_after_minutes()
+    now = _utc(t.generated_at)
+
+    err = getattr(t, "calendar_load_error", None)
+    evs = list(getattr(t, "calendar_events", None) or [])
+
+    intro = (
+        "Источник: Investing.com, макро по валютам <strong>GBP / JPY / EUR</strong> "
+        "(не даты отчётов по тикеру). "
+        f"Гейт помечает <code>calendar_high_soon</code>, только если есть "
+        f'<span class="tag">HIGH</span> в окне <strong>−{ma}…+{mb}</strong> минут от времени отчёта (UTC). '
+        "Во fusion вклад Calendar при выключенном <code>NYSE_LLM_CALENDAR</code> — нейтральный сигнал (bias 0); "
+        "это не «пропуск» таблицы ниже."
+    )
+
+    head = (
+        '<div id="bcal"><h2>③b Макро-календарь</h2>'
+        f'<p class="meta">{intro}</p>'
+    )
+
+    if err:
+        return head + f'<p class="neg">Ошибка загрузки: {_h(err)}</p></div>'
+
+    if not evs:
+        return (
+            head
+            + "<p>В выборке <strong>0</strong> событий — пустой ответ API или нет релизов в отдаваемом окне.</p>"
+            + "</div>"
+        )
+
+    rows = []
+    for e in sorted(evs, key=lambda x: _utc(x.time))[:100]:
+        delta_min = (_utc(e.time) - now).total_seconds() / 60.0
+        in_win = (
+            e.importance == CalendarEventImportance.HIGH
+            and -ma <= delta_min <= mb
+        )
+        mark = '<span class="pos">★ окно</span>' if in_win else "—"
+        cur = getattr(e.currency, "value", str(e.currency))
+        rows.append(
+            "<tr>"
+            f"<td>{_utc(e.time).strftime('%Y-%m-%d %H:%M')}</td>"
+            f"<td>{_h((e.name or '')[:120])}</td>"
+            f"<td>{_h(e.importance.value)}</td>"
+            f"<td>{_h(cur)}</td>"
+            f'<td class="score">{delta_min:+.0f}</td>'
+            f"<td>{mark}</td>"
+            "</tr>"
+        )
+
+    gch = t.gate_ctx.calendar_high_soon
+    tbl = (
+        f"<p>Всего в сырье: <strong>{len(evs)}</strong> (показано до 100 по времени).</p>"
+        "<table><thead><tr>"
+        "<th>Время UTC</th><th>Событие</th><th>Важн.</th><th>Валюта</th>"
+        "<th>Δ мин</th><th>Окно гейта</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+        f'<p class="meta">На момент отчёта <code>calendar_high_soon={gch}</code> (блок ⑥). '
+        "Если все события <em>moderate</em> или вне окна — флаг остаётся False.</p>"
+        "</div>"
+    )
+    return head + tbl
+
+
 # ---------------------------------------------------------------------------
 # /signal — полный торговый сигнал
 # ---------------------------------------------------------------------------
@@ -370,6 +453,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
       1. Trade Signal (Entry/TP/SL или NO TRADE)
       2. Fusion breakdown (tech/news contributions)
       3. Technical Signal (все score-поля)
+      3b. Макро-календарь (сырьё ecalendar + окно гейта)
       4. L3 — Статьи с cheap_sentiment + канал
       5. L3 — DraftImpulse (per-channel stats)
       6. L4 — Gate decision (context + LLMMode + reason)
@@ -420,6 +504,11 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     news_raw = fused.news_contrib / W_NEWS if W_NEWS else 0.0
     cal_raw = fused.cal_contrib / W_CAL if W_CAL else 0.0
     news_note = "" if fused.news_available else '<p class="meta">News LLM: нет агрегата (gate SKIP)</p>'
+    cal_fusion_note = (
+        '<p class="meta">Calendar во fusion: при выключенном <code>NYSE_LLM_CALENDAR</code> '
+        'в сделку идёт нейтральный календарный сигнал (bias 0). Список макро-событий — '
+        '<a href="#bcal" style="color:#58a6ff">③b Макро-календарь</a>.</p>'
+    )
     b2 = (
         "<h2>② Fusion Breakdown</h2>"
         "<table><thead><tr><th>Агент</th><th>Вес</th><th>Raw bias</th>"
@@ -437,7 +526,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         f'<td class="score {_fcls(fused.value)}"><strong>{fused.value:+.4f}</strong>'
         f" conf={fused.confidence:.2f}</td></tr>"
         "</tbody></table>"
-        f"{news_note}"
+        f"{news_note}{cal_fusion_note}"
     )
 
     # -----------------------------------------------------------------------
@@ -642,6 +731,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     # Навигация + сборка
     # -----------------------------------------------------------------------
     b0 = _debug_auto_analysis_html(t)
+    bcal = _debug_calendar_macro_html(t)
     nav = (
         '<nav style="margin-bottom:20px;padding:10px;background:#161b22;'
         'border-radius:6px;font-size:0.85em">'
@@ -650,6 +740,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         '<a href="#b1" style="color:#58a6ff">① Trade</a> · '
         '<a href="#b2" style="color:#58a6ff">② Fusion</a> · '
         '<a href="#b3" style="color:#58a6ff">③ Technical</a> · '
+        '<a href="#bcal" style="color:#58a6ff">③b Cal</a> · '
         '<a href="#b4" style="color:#58a6ff">④ Articles</a> · '
         '<a href="#b5" style="color:#58a6ff">⑤ DraftImpulse</a> · '
         '<a href="#b6" style="color:#58a6ff">⑥ Gate</a> · '
@@ -666,6 +757,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         + _anchor("b1", b1)
         + _anchor("b2", b2)
         + _anchor("b3", b3)
+        + bcal
         + _anchor("b4", b4)
         + _anchor("b5", b5)
         + _anchor("b6", b6)

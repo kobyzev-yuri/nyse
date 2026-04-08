@@ -90,6 +90,10 @@ class PipelineDebugTrace:
     fused: FusedBias
     trade: Trade
 
+    # --- Макро-календарь (сырьё для гейта; для HTML-таблицы) ---
+    calendar_events: List = field(default_factory=list)
+    calendar_load_error: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Причина решения Gate (для отображения в HTML)
@@ -188,13 +192,16 @@ def run_debug_pipeline(
 
     # --- L4: Gate (календарь HIGH в окне → FULL) ---
     cal_events: list = []
+    cal_err: Optional[str] = None
     try:
         from domain import Currency
         from sources.ecalendar import Source as CalendarSource
 
-        cal_events = CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
-    except Exception:
-        pass
+        cal_events = list(
+            CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
+        )
+    except Exception as exc:
+        cal_err = f"{type(exc).__name__}: {exc}"[:400]
 
     gate_ctx = build_gate_context(
         draft_bias=bias,
@@ -263,4 +270,6 @@ def run_debug_pipeline(
         news_signal=news_signal,
         fused=fused,
         trade=trade,
+        calendar_events=cal_events,
+        calendar_load_error=cal_err,
     )
