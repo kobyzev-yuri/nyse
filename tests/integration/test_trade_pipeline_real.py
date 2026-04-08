@@ -19,7 +19,7 @@
     # Полный цикл (LLM нужен OPENAI_API_KEY):
     pytest tests/integration/test_trade_pipeline_real.py -v -m integration -s
 
-KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent — остальной pipeline без изменений.
+Опционально: ``NYSE_LLM_TECHNICAL=1`` — ``LlmTechnicalAgent`` вместо эвристик; остальной pipeline без изменений.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def tech_signals(game5m_tickers, all_candles, all_metrics):
 @pytest.mark.integration
 def test_trade_tech_only(game5m_tickers, tech_signals):
     """
-    TradeBuilder с news_signal=None (tech-only fusion).
+    TradeBuilder с news_signal=None (news_bias=0 в формуле pystockinvest 55/30/15).
     Проверяет: Position корректна, TP > Entry > SL (LONG), форматирование.
     """
     from domain import Direction, PositionType, SignalBundle

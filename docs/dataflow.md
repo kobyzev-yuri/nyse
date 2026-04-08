@@ -120,7 +120,7 @@ flowchart TB
     C4{"|bias| < T1 AND\nno REGIME?"}
     C5{"article_count > N?"}
 
-    FULL["FULL\nrun_news_signal_pipeline\n(Kerima LLM)"]
+    FULL["FULL\nrun_news_signal_pipeline\n(structured LLM)"]
     LITE["LITE\nllm_digest\n(краткий дайджест)"]
     SKIP["SKIP\nиспользовать draft_bias"]
 
@@ -150,7 +150,7 @@ flowchart TB
 
 ---
 
-## 4. Технический сигнал Kerima (TechnicalSignal)
+## 4. Технический сигнал (TechnicalSignal, pystockinvest market)
 
 ```mermaid
 flowchart LR
@@ -187,8 +187,8 @@ flowchart TB
     subgraph TB_BOX["TradeBuilder (pystockinvest/agent/trade.py)"]
         FBIAS["final_bias =\n0.55 × tech_bias\n+ 0.30 × news_bias\n+ 0.15 × cal_bias"]
         FCONF["confidence =\n(0.50 × tech_conf\n+ 0.30 × news_conf\n+ 0.20 × cal_conf\n+ agreement_bonus)\n× (1 − 0.35 × event_risk)"]
-        CHECK{"tradeability\n≥ 0.40?"}
-        POS["Position\nsize, stop, take"]
+        CHECK{"tradeability\n≥ 0.40\nи |final_bias| > 0.2?"}
+        POS["Position\nentry LIMIT/MARKET\nTP/SL от ATR"]
         NONE["PositionType.NONE"]
     end
 

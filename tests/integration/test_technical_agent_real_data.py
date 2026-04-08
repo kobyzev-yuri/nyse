@@ -14,8 +14,8 @@
 Запуск:
     pytest tests/integration/test_technical_agent_real_data.py -v -m integration -s
 
-KERIM_REPLACE: тот же тест (все тикеры GAME_5M) применим после замены на KerimsAgent —
-    контракт predict(ticker, ticker_data, metrics) → TechnicalSignal идентичен.
+Тот же сценарий для ``LlmTechnicalAgent`` (``NYSE_LLM_TECHNICAL=1``): тот же контракт
+    ``predict(ticker, ticker_data, metrics)`` → ``TechnicalSignal``.
 """
 
 from __future__ import annotations

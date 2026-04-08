@@ -117,7 +117,7 @@ class NewsArticle:
 
 
 # --------- Level 5: structured LLM signal (align with pystockinvest `agent/models.py`) ---------
-# Контракт полей — тот же, что у Kerima / NewsSignalAgent, чтобы позже склеить репозитории.
+# Контракт полей — тот же, что в pystockinvest (NewsSignalAgent), для совместимости репозиториев.
 
 
 class NewsTimeHorizon(str, enum.Enum):

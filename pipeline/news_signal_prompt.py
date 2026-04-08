@@ -1,27 +1,19 @@
 """
 Уровень 5 (шаг 6): промпт для structured LLM signal.
 
-``build_signal_messages`` возвращает список сообщений для ``chat_completion_text``.
-Формат payload совместим с ``pystockinvest/agent/news/dto.py``:
-  - системный промпт идентичен Kerima (``SYSTEM_PROMPT``);
-  - user-payload — JSON ``NewsSignalAgentInput`` (target_ticker, current_time, articles[]);
-  - от модели ожидается JSON ``{"items": [...]}`` → ``parse_news_signal_llm_json``.
+Тексты **SYSTEM_PROMPT** и **USER_PROMPT_TEMPLATE** совпадают с
+``pystockinvest/agent/news/signal.py`` (байт-в-байт для system; user — тот же шаблон + JSON payload).
 
-JSON-схема (поля items[i]):
-    article_index  : int   1-based, по порядку входного списка
-    sentiment      : float -1..1
-    impact_strength: "low" | "moderate" | "high"
-    relevance      : "mention" | "related" | "primary"
-    surprise       : "none" | "minor" | "significant" | "major"
-    time_horizon   : "intraday" | "1-3d" | "3-7d" | "long"
-    confidence     : float 0..1
+Схема ответа задаётся ``with_structured_output(NewsSignalLLMResponse)`` в
+``news_signal_runner.py``, а не перечислением полей в промпте.
+
+Payload JSON — как ``NewsSignalAgentInput`` в pystockinvest (target_ticker, current_time, articles[]).
 
 Запуск: ``python -m pipeline.news_signal_prompt`` или ``python pipeline/news_signal_prompt.py``.
 """
 
 from __future__ import annotations
 
-import json
 import runpy
 import sys
 from datetime import datetime, timezone
@@ -37,41 +29,30 @@ if __name__ == "__main__" and __package__ is None:
 
 from domain import NewsArticle
 
-SYSTEM_PROMPT = (
-    "You are a financial news analyst for stock prediction.\n"
-    "For each article, estimate the expected effect on the target ticker.\n"
-    "\n"
-    "Your output should help determine the likely direction, strength, and duration "
-    "of the target ticker's price move.\n"
-    "Be conservative when relevance is weak.\n"
-    "Return only valid JSON matching the schema — no markdown, no extra keys."
-)
+from .news_dto import NewsArticleInput, NewsSignalAgentInput
 
-_USER_PREFIX = (
-    "Analyze each article independently for its likely effect on the target ticker.\n"
-    "Analyze in context of short-term price move (over next 1-3 days).\n"
-    "Return exactly one signal per article, in the same order as provided.\n"
-    "\n"
-    'Reply with a JSON object {"items": [...]} where each element has:\n'
-    '  article_index (int, 1-based), sentiment (float -1..1),\n'
-    '  impact_strength ("low"|"moderate"|"high"), relevance ("mention"|"related"|"primary"),\n'
-    '  surprise ("none"|"minor"|"significant"|"major"),\n'
-    '  time_horizon ("intraday"|"1-3d"|"3-7d"|"long"), confidence (float 0..1).\n'
-    "\n"
-    "Input:\n"
-)
+# Дословно из pystockinvest/agent/news/signal.py
+SYSTEM_PROMPT = """
+You are a financial news analyst for stock prediction.
+For each article, estimate the expected effect on the target ticker.
 
-PROMPT_VERSION = "v1"
+Your output should help determine the likely direction, strength, and duration of the target ticker's price move.
+Be conservative when relevance is weak.
+Return only the structured output.
+""".strip()
 
 
-def _article_to_dict(idx: int, a: NewsArticle) -> dict:
-    return {
-        "article_index": idx,
-        "title": a.title.strip(),
-        "summary": a.summary.strip() if a.summary else None,
-        "timestamp": a.timestamp.isoformat(),
-        "source": a.publisher or a.provider_id,
-    }
+USER_PROMPT_TEMPLATE = """
+Analyze each article independently for its likely effect on the target ticker.
+Analyze in context of short-term price move (over next 1-3 days).
+Return exactly one signal per article, in the same order as provided.
+
+Input:
+{payload}
+""".strip()
+
+# Инкремент при любом изменении SYSTEM/USER выше — сбрасывает LLM-кэш
+PROMPT_VERSION = "v3"
 
 
 def build_signal_messages(
@@ -88,13 +69,24 @@ def build_signal_messages(
     """
     if not articles:
         raise ValueError("articles must not be empty")
-    ts = (now or datetime.now(timezone.utc)).isoformat()
-    payload = {
-        "target_ticker": ticker,
-        "current_time": ts,
-        "articles": [_article_to_dict(i + 1, a) for i, a in enumerate(articles)],
-    }
-    user_content = _USER_PREFIX + json.dumps(payload, ensure_ascii=False, indent=2)
+    ts = now or datetime.now(timezone.utc)
+    batch_input = NewsSignalAgentInput(
+        target_ticker=ticker,
+        current_time=ts,
+        articles=[
+            NewsArticleInput(
+                article_index=i + 1,
+                title=a.title.strip(),
+                summary=a.summary.strip() if a.summary else None,
+                timestamp=a.timestamp,
+                source=a.publisher or a.provider_id,
+            )
+            for i, a in enumerate(articles)
+        ],
+    )
+    user_content = USER_PROMPT_TEMPLATE.format(
+        payload=batch_input.model_dump_json(indent=2),
+    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},

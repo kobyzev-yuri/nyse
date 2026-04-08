@@ -1,8 +1,8 @@
 """
 Protocol-контракт для технического агента.
 
-Любой агент (LseHeuristicAgent, KerimsAgent и т.д.) должен реализовывать
-этот интерфейс — тогда замена прозрачна для TradeBuilder и бота.
+``LseHeuristicAgent``, ``LlmTechnicalAgent`` и агент из pystockinvest реализуют
+этот интерфейс — замена прозрачна для TradeBuilder и бота.
 
 Использование::
 
@@ -12,9 +12,7 @@ Protocol-контракт для технического агента.
         sig = agent.predict(ticker, ticker_data, metrics)
         ...
 
-KERIM_REPLACE: KerimsAgent из pystockinvest/agent/market/agent.py реализует
-этот же Protocol — проверить через mypy/pyright перед заменой:
-    mypy --strict nyse/bot/nyse_bot.py
+Проверка типов: ``mypy --strict nyse/bot/nyse_bot.py`` после смены реализации.
 """
 
 from __future__ import annotations

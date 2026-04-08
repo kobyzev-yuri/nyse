@@ -1,7 +1,7 @@
 """
 Этап F: короткий «lite» дайджест по заголовкам (промпт + опционально кэшированный вызов).
 
-Полный Kerima / structured output — отдельно; здесь только заготовка для микро-режима.
+Полный structured LLM (news runner) — отдельно; здесь только заготовка для микро-режима LITE.
 
 Запуск из корня nyse: ``python -m pipeline.llm_digest`` или ``python pipeline/llm_digest.py``.
 """
@@ -20,8 +20,6 @@ if __name__ == "__main__" and __package__ is None:
         sys.path.insert(0, str(_root))
     runpy.run_module("pipeline.llm_digest", run_name="__main__")
     raise SystemExit(0)
-
-from langchain_core.messages import HumanMessage, SystemMessage
 
 from .cache import FileCache
 
@@ -73,6 +71,8 @@ def run_lite_digest_cached(
     key = cache_key_llm(messages, s.model, prompt_version=prompt_version)
     c = cache if cache is not None else default_llm_file_cache()
     ttl = ttl_sec if ttl_sec is not None else config_loader.llm_cache_ttl_sec()
+
+    from .lc_shim import HumanMessage, SystemMessage
 
     _llm = get_chat_model(s)
     lc_messages = [

@@ -27,9 +27,6 @@ if __name__ == "__main__" and __package__ is None:
     runpy.run_module("pipeline.news_signal_runner", run_name="__main__")
     raise SystemExit(0)
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from domain import AggregatedNewsSignal, NewsArticle
 
 from .cache import FileCache
@@ -43,6 +40,7 @@ from .types import LLMMode, ThresholdConfig
 
 if TYPE_CHECKING:
     from config_loader import OpenAISettings
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 
 def run_news_signal_pipeline(
@@ -54,7 +52,7 @@ def run_news_signal_pipeline(
     cache: Optional[FileCache] = None,
     settings: Optional["OpenAISettings"] = None,
     ttl_sec: Optional[int] = None,
-    llm: Optional[BaseChatModel] = None,
+    llm: Optional["BaseChatModel"] = None,
     now: Optional[datetime] = None,
 ) -> AggregatedNewsSignal:
     """
@@ -85,6 +83,8 @@ def run_news_signal_pipeline(
         return aggregate_news_signals([])
 
     batch = [arts[i] for i in plan.indices_for_structured_signal]
+
+    from .lc_shim import HumanMessage, SystemMessage
 
     # Промпт в виде dict (для cache_key_llm) + LangChain-объекты для invoke
     msg_dicts = build_signal_messages(batch, ticker, now=_now)

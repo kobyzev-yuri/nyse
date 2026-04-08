@@ -48,7 +48,7 @@
 | DTO уровня 5 (`NewsSignal`, `AggregatedNewsSignal`) | `tests/unit/test_domain_news_signal.py` (значения enum как в pystockinvest `agent/models.py`) |
 | JSON → Pydantic ответ LLM (шаг 2) | `tests/unit/test_news_signal_schema.py` (`parse_news_signal_llm_json`, fence) |
 | План батча по `LLMMode` (шаг 3) | `tests/unit/test_llm_batch_plan.py` (`plan_llm_article_batch`) |
-| Агрегатор `NewsSignal → AggregatedNewsSignal` (шаг 5) | `tests/unit/test_news_signal_aggregator.py` (веса Kerima, 10 тестов) |
+| Агрегатор `NewsSignal → AggregatedNewsSignal` (шаг 5) | `tests/unit/test_news_signal_aggregator.py` (веса pystockinvest, 10 тестов) |
 | Промпт `build_signal_messages` (шаг 6) | `tests/unit/test_news_signal_prompt.py` (структура, payload JSON, 10 тестов) |
 | Оркестратор `run_news_signal_pipeline` (шаг 7) | `tests/unit/test_news_signal_runner.py` (mock HTTP, кэш, 7 тестов); `tests/integration/test_news_signal_runner_smoke.py` (реальный API, skip без сети) |
 | Калибровка порогов (G) | Журнал 4 прогонов — `docs/calibration.md`; профили `PROFILE_GAME5M`/`PROFILE_CONTEXT` в `pipeline/types.py`; скрипт `scripts/calibrate_gate.py` |
@@ -82,7 +82,7 @@
 
 ### 1.4 Намеренно не автоматизировано в CI без договорённости
 
-- Полный Kerima/LLM-пайплайн на прод-промптах; для HTTP completion есть mock в `tests/unit/test_llm_*.py` (см. `docs/testing_telegram_plan.md`).
+- Полный structured LLM-пайплайн на прод-промптах; для HTTP completion есть mock в `tests/unit/test_llm_*.py` (см. `docs/testing_telegram_plan.md`).
 - Минутные свечи (тяжёлый/лимитный запрос к Yahoo).
 - Скрейп Investing HTML-ленты (хрупко; в nyse приоритет API/RSS).
 
@@ -103,7 +103,7 @@
 | **C** | Календарь в гейте | **`pipeline.calendar_high_soon`**, **`build_gate_context`** (`pipeline/calendar_context.py`): только `HIGH`, окно `[now−after, now+before]` мин (env `NYSE_CALENDAR_HIGH_*`) | `tests/unit/test_calendar_context.py`; живые события — по-прежнему `sources.ecalendar` → список `CalendarEvent` |
 | **D** | Уровень 3 (уточнение) | **`DraftImpulse`**: счётчики статей и суммы весов по каналам; ``max_abs_regime`` / ``max_abs_policy``; среднее INCREMENTAL отделено от REGIME/POLICY (`pipeline/types.py`, `draft_impulse`) | `tests/unit/test_draft.py` (в т.ч. «только REGIME» не даёт ненулевой incremental) |
 | **E** | Кэш по доку | **`pipeline/news_cache.py`**: сериализация ``NewsArticle``, ``get_or_set_articles`` / ``get_or_set_draft_impulse``, ключи ``cache_key_*``; env ``NYSE_CACHE_ROOT``, ``NYSE_NEWS_RAW_TTL_SEC``, ``NYSE_NEWS_AGGREGATE_TTL_SEC`` | `tests/unit/test_news_cache.py` + базовый `test_cache.py` |
-| **F** | HTTP LLM + кэш completion + lite-дайджест | **`pipeline/llm_client.py`**, **`llm_cache.py`**, **`llm_digest.py`** (см. §1.3); не полный Kerima, а инфраструктура вызова и кэша | `tests/unit/test_llm_*.py` |
+| **F** | HTTP LLM + кэш completion + lite-дайджест | **`pipeline/llm_client.py`**, **`llm_cache.py`**, **`llm_digest.py`** (см. §1.3); инфраструктура вызова и кэша до полного news-runner | `tests/unit/test_llm_*.py` |
 | **G** | Калибровка порогов | Процедура и журнал T1/T2/N; подстройка по живым выборкам — **непрерывный** процесс | **`docs/calibration.md`**, таблица в **`news_pipeline_hierarchy.md`** (§ «Калибровка (G)») |
 
 **Порядок работ (исторический):** A → B → C параллельно с уточнением D; E по мере нагрузки на API; F после стабилизации 1–4 уровней; **G идёт параллельно с эксплуатацией**, не «одним коммитом».
@@ -115,11 +115,11 @@
 | Уровень / тема | Содержание | Примечание |
 |----------------|------------|------------|
 | **G (ongoing)** | Калибровка `ThresholdConfig`, журнал в `calibration.md` | 4 прогона; профили GAME5M/CONTEXT; баг fix в порядке гейта; `price_pattern_boost` |
-| **Уровень 5** | Полный **structured LLM** (Kerima-стиль): selection при необходимости, `NewsSignal` / `AggregatedNewsSignal`, промпты и контракт как в pystockinvest | Сверх F: не только `chat_completion_text`, а согласованные DTO и агрегация |
-| **Уровень 6** | Слияние новостей с **техникой и календарём** (`TradeBuilder`, веса) | Следующий этап: подключить `AggregatedNewsSignal` к агенту lse/pystockinvest |
+| **Уровень 5** | Полный **structured LLM** (как pystockinvest): selection при необходимости, `NewsSignal` / `AggregatedNewsSignal`, промпты и контракт совпадают | Сверх F: не только `chat_completion_text`, а согласованные DTO и агрегация |
+| **Уровень 6** | Слияние **техника + новости + календарь** в `Trade` | ✅ Реализовано: `pipeline/trade_builder.py` = логика `pystockinvest/agent/trade.py` |
 | **Интеграция / CI** | Опционально: один **smoke**-integration тест с реальным HTTP completion (ключ в env, маркер `integration`) | Сейчас `test_openai_config.py` проверяет только загрузку настроек, не вызов API |
 
-При появлении устойчивого следующего чеклиста (уровни 5–6 + агент) имеет смысл **заархивировать** этот файл по правилам §3 и вести новый документ под Kerima/оркестратор.
+При появлении устойчивого следующего чеклиста (уровни 5–6 + агент) имеет смысл **заархивировать** этот файл по правилам §3 и вести новый документ под оркестратор/прод.
 
 ---
 
@@ -128,7 +128,7 @@
 - Раздел **§1** при смене набора тестов/адаптеров — обновлять фактами (даты по желанию в коммите).
 - Раздел **§2.1** — таблица A–G остаётся как **исторический снимок**; новые буквенные этапы не добавлять без пересмотра всего плана.
 - Раздел **§2.2** — дополнять по мере появления задач уровней 5–6 (или вынести в отдельный чеклист).
-- Когда основная работа сместится на **уровни 5–6 и агент**, этот документ можно **заархивировать** (переименовать в `*_archive_YYYY-MM.md`) и вести следующий чеклист под Kerima/оркестратор.
+- Когда основная работа сместится на **уровни 5–6 и агент**, этот документ можно **заархивировать** (переименовать в `*_archive_YYYY-MM.md`) и вести следующий чеклист под оркестратор/прод.
 
 ---
 

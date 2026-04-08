@@ -34,7 +34,7 @@ def test_system_prompt_contains_key_instructions():
     sys_text = msgs[0]["content"]
     assert "financial news analyst" in sys_text
     assert "conservative" in sys_text
-    assert "JSON" in sys_text or "json" in sys_text.lower()
+    assert "structured output" in sys_text.lower()
 
 
 def test_user_payload_is_valid_json_containing_articles():

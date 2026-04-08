@@ -20,7 +20,7 @@ from typing import Optional
 
 from domain import Direction, PositionType, TechnicalSignal, Trade
 
-from .trade_builder import FusedBias
+from .trade_builder import FusedBias, W_CAL, W_NEWS, W_TECH
 
 # Стрелки и эмодзи направлений
 _SIDE_EMOJI = {Direction.LONG: "📈", Direction.SHORT: "📉"}
@@ -53,9 +53,8 @@ def format_trade(
         TP      $821.06   +15.9%
         SL      $652.16   -7.9%
         ──────────────────────────
-        Tech (55%):  bias +0.26 ▲  RSI 57  ATR 56.30
-        News (45%):  bias +0.44  8 статей  conf 82%
-        Fused:  +0.141 + +0.200 = +0.341
+        Tech (55%) / News (30%) / Cal (15%) — как в pystockinvest
+        Fused:  tech_contrib + news_contrib + cal_contrib = final_bias
         ──────────────────────────
         Technical bias +0.26 (moderate bullish)...
         Aggregated news bias is 0.44...
@@ -101,37 +100,42 @@ def format_trade(
         except Exception:
             pass
 
-        # Fusion breakdown
+        # Fusion breakdown (веса как в pystockinvest: 55% / 30% / 15%)
         if fused is not None:
             arrow = _bias_arrow(fused.value)
+            tech_raw = fused.tech_contrib / W_TECH if W_TECH else 0.0
+            news_raw = fused.news_contrib / W_NEWS if W_NEWS else 0.0
+            cal_raw = fused.cal_contrib / W_CAL if W_CAL else 0.0
+            lines.append(
+                f"<b>Tech</b> ({int(W_TECH * 100)}%):  "
+                f"bias {tech_raw:+.2f} {arrow}"
+            )
             if fused.news_available:
-                t_pct = int(55)
-                n_pct = int(45)
                 lines.append(
-                    f"<b>Tech</b> ({t_pct}%):  "
-                    f"bias {fused.tech_contrib / 0.55:+.2f} {arrow}"
-                )
-                lines.append(
-                    f"<b>News</b> ({n_pct}%):  "
-                    f"contrib {fused.news_contrib:+.3f}"
-                )
-                lines.append(
-                    f"<b>Fused:</b>  "
-                    f"{fused.tech_contrib:+.3f} + {fused.news_contrib:+.3f} = "
-                    f"<b>{fused.value:+.3f}</b>"
+                    f"<b>News</b> ({int(W_NEWS * 100)}%):  "
+                    f"bias {news_raw:+.2f} · contrib {fused.news_contrib:+.3f}"
                 )
             else:
                 lines.append(
-                    f"<b>Tech-only:</b>  bias {fused.value:+.3f} {arrow}   "
-                    f"<i>(новостей нет)</i>"
+                    f"<b>News</b> ({int(W_NEWS * 100)}%):  "
+                    f"<i>(нет LLM-агрегата)</i> · contrib {fused.news_contrib:+.3f}"
                 )
+            lines.append(
+                f"<b>Cal</b> ({int(W_CAL * 100)}%):  "
+                f"bias {cal_raw:+.2f} · contrib {fused.cal_contrib:+.3f}"
+            )
+            lines.append(
+                f"<b>Fused:</b>  "
+                f"{fused.tech_contrib:+.3f} + {fused.news_contrib:+.3f} + {fused.cal_contrib:+.3f} = "
+                f"<b>{fused.value:+.3f}</b>"
+            )
             lines.append("─" * 28)
 
         # --- Summary строки ---
         for line in trade.technical_summary[:2]:
             lines.append(f"<i>{_h(line)}</i>")
 
-        news_lines = [l for l in trade.news_summary if "fusion contrib" not in l]
+        news_lines = list(trade.news_summary)
         for line in news_lines[:2]:
             lines.append(f"<i>{_h(line)}</i>")
 

@@ -2,7 +2,7 @@
 Запуск NyseBot в режиме long-polling (для разработки и тестирования).
 
 Использование:
-    cd /media/cnn/home/cnn/lse/nyse
+    cd /path/to/nyse
     conda run -n py11 python scripts/run_bot.py
 
 Нужные переменные в config.env:

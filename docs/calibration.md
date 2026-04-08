@@ -17,7 +17,7 @@
 | **T2** | `t2_regime_confidence` | `0.5` | REGIME с rule-confidence ≥ T2 → `full` |
 | **N** | `max_articles_full_batch` | `15` | Больше статей в окне → `lite` (сужение батча) |
 
-Переменные в **`config.env.example`** (`NYSE_GATE_*`) задуманы как будущие переопределения; при подключении к загрузчику конфига — читать их в том же духе, что `NYSE_LLM_CACHE_TTL_SEC`.
+Переменные **`NYSE_GATE_T1`**, **`NYSE_GATE_T2`**, **`NYSE_GATE_MAX_N`**, **`NYSE_GATE_REGIME_STRESS_MIN`** в **`config.env.example`** переопределяют поля базового профиля **`PROFILE_GAME5M`** через **`config_loader.get_pipeline_gate_threshold()`** (бот **`nyse_bot._worker_signal`**, калибровка без правки кода).
 
 ---
 
@@ -418,3 +418,30 @@ output стал более/менее консервативным по `sentime
 - `news_pipeline_hierarchy.md` — иерархия уровней и таблица дефолтов.
 - `news_sources_testing_and_pipeline_roadmap.md` — этапы A–G.
 - `docs/testing_telegram_plan.md` — mock LLM в тестах, интеграция с ключом.
+
+---
+
+### Прогон — 2026-04-08 (после синхронизации TradeBuilder с `pystockinvest/agent/trade.py`)
+
+**Контекст:** уровень 6 (торговое решение) приведён к pystockinvest; **гейт LLM (T1/T2/N)** не менялся — перекалибровка для проверки актуальности профиля `PROFILE_GAME5M` на текущих данных.
+
+**Команда:**
+
+```bash
+python scripts/calibrate_gate.py --profile game5m --tickers SNDK NBIS CIEN --days 1
+```
+
+**Окружение:** без локального FinBERT (`transformers` не установлен в использованном интерпретаторе — в логе предупреждения; на проде рекомендуется `pip install -e ".[sentiment]"` в `py11`).
+
+**Результат:**
+
+| Тикер | N статей | bias | regime_stress | Режим |
+|-------|----------|------|---------------|--------|
+| SNDK  | 6 | −0.394 | 0.000 | **FULL** |
+| NBIS  | 1 | +0.000 | 0.000 | **SKIP** |
+| CIEN  | 3 | +0.000 | 0.000 | **SKIP** |
+
+Конфиг: **T1=0.12, T2=0.5, N=8**, half_life=12 ч.  
+Итого: **FULL=1, LITE=0, SKIP=2**.
+
+**Вывод:** пороги GAME_5M остаются рабочими; при полном стеке FinBERT картина может сдвинуться — повторить прогон в `conda run -n py11` с установленным `[sentiment]`.

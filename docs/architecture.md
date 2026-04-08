@@ -39,7 +39,7 @@ nyse/
 │   ├── news_signal_schema.py    # ур. 5: Pydantic-схема LLM-ответа
 │   ├── llm_batch_plan.py        # ур. 5: отбор батча
 │   ├── news_signal_aggregator.py  # ур. 5: агрегация → AggregatedNewsSignal
-│   ├── news_signal_prompt.py    # ур. 5: Kerima-стиль промпт
+│   ├── news_signal_prompt.py    # ур. 5: промпт в стиле pystockinvest (NewsSignalAgent)
 │   ├── news_signal_runner.py    # ур. 5: оркестратор
 │   └── cache.py          # FileCache (базовый)
 └── sources/

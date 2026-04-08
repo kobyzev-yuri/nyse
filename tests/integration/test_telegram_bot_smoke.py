@@ -9,9 +9,9 @@
 Запуск:
     pytest tests/integration/test_telegram_bot_smoke.py -v -m integration -s
 
-Нужно в config.env:
+Нужно в config.env (см. ``config.env.example``):
     TELEGRAM_BOT_TOKEN=<токен от @BotFather>
-    TELEGRAM_SIGNAL_CHAT_ID=<chat_id>
+    TELEGRAM_SIGNAL_CHAT_ID=<числовой chat_id>  (или TELEGRAM_SIGNAL_CHAT_IDS=id1,id2)
 """
 
 from __future__ import annotations
@@ -77,8 +77,7 @@ def test_telegram_send_technical_signal_format(require_telegram_settings):
     Форматированное сообщение с TechnicalSignal отправляется без ошибок.
 
     Симулирует вывод сигнала в бот-команде /signal NVDA.
-    KERIM_REPLACE: после интеграции с Kerim-агентом — тот же формат, 
-    только sig получен от KerimsAgent.predict() вместо LseHeuristicAgent.
+    Формат совпадает с выводом /signal (эвристика или ``LlmTechnicalAgent``).
     """
     token, chat_id = require_telegram_settings
 
@@ -93,7 +92,7 @@ def test_telegram_send_technical_signal_format(require_telegram_settings):
         "• Volatility regime `0.48` — calm, ATR=5.25\n"
         "• Momentum `+0.32`  Breakout `+0.55`\n"
         "\n"
-        "_⚠️ baseline: LseHeuristicAgent (KERIM\\_REPLACE)_"
+        "_⚠️ smoke: synthetic TechnicalSignal text_"
     )
 
     result = _tg(
@@ -112,7 +111,6 @@ def test_telegram_send_real_game5m_signal(require_telegram_settings, game5m_tick
     Полный цикл: реальные данные GAME_5M → LseHeuristicAgent → сигналы всех тикеров → Telegram.
 
     Требует сеть (yfinance + Finviz + Telegram).
-    KERIM_REPLACE: тот же тест после замены на KerimsAgent — формат сообщения идентичен.
     """
     pytest.importorskip("yfinance")
     pytest.importorskip("finvizfinance")

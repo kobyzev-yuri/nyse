@@ -1,7 +1,8 @@
 """
-Уровень 5 (шаг 2): Pydantic-схема ответа LLM как в pystockinvest `agent/news/dto.py`.
+Уровень 5 (шаг 2): разбор JSON ответа LLM → доменные ``NewsSignal``.
 
-Парсинг сырой строки (JSON, опционально в markdown-огороде ```json) → валидация → ``domain.NewsSignal``.
+Модели входа/выхода — в ``pipeline/news_dto.py`` (как ``pystockinvest/agent/news/dto.py``).
+Здесь: парсинг сырой строки, strip markdown fence, маппинг в ``domain.NewsSignal``.
 
 Запуск из корня nyse: ``python -m pipeline.news_signal_schema`` или ``python pipeline/news_signal_schema.py``.
 """
@@ -23,51 +24,12 @@ import json
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from domain import NewsSignal
 
-from domain import (
-    NewsImpact,
-    NewsRelevance,
-    NewsSignal,
-    NewsSurprise,
-    NewsTimeHorizon,
-)
+from .news_dto import NewsSignalLLMResponse
 
-
-class NewsSignalLLMItem(BaseModel):
-    """Один элемент ответа; поля как у pydantic `NewsSignal` в pystockinvest."""
-
-    model_config = ConfigDict(extra="forbid", use_enum_values=False)
-
-    article_index: int = Field(ge=1, description="1-based index in the prompt list.")
-    sentiment: float = Field(ge=-1.0, le=1.0)
-    impact_strength: NewsImpact
-    relevance: NewsRelevance
-    surprise: NewsSurprise
-    time_horizon: NewsTimeHorizon
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class NewsSignalLLMResponse(BaseModel):
-    """Корневой объект: ``{"items": [...]}`` — как ``NewsSignalResponse`` в Kerima."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[NewsSignalLLMItem] = Field(
-        min_length=1,
-        description="One signal per article, article_index 1..n in order.",
-    )
-
-    @model_validator(mode="after")
-    def _sequential_indexes(self) -> NewsSignalLLMResponse:
-        expected = list(range(1, len(self.items) + 1))
-        actual = [x.article_index for x in self.items]
-        if actual != expected:
-            raise ValueError(
-                "items must have article_index 1..n in order, "
-                f"expected {expected}, got {actual}"
-            )
-        return self
+# Обратная совместимость импортов
+from .news_dto import NewsArticleInput, NewsSignalAgentInput, NewsSignalLLMItem  # noqa: F401
 
 
 def strip_json_fence(raw: str) -> str:

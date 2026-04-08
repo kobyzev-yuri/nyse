@@ -27,6 +27,40 @@
 
 Приоритет: уже заданные переменные окружения **не перезаписываются** файлами.
 
+## Structured LLM и экономия токенов (расширения относительно pystockinvest)
+
+Архитектура DTO/промптов совпадает с **pystockinvest** (`agent/news`, `agent/market`, `agent/calendar`). В NYSE дополнительно:
+
+| Механизм | Где | Смысл |
+|----------|-----|--------|
+| **Гейт L4** | `pipeline/gates.py` | Режим `SKIP` не вызывает news-LLM; `LITE` — дайджест без полного structured signal |
+| **Кэш completion** | `pipeline/llm_cache.py`, `cache_key_llm` | Одинаковый вход (промпт + модель + `PROMPT_VERSION`) → повтор без API |
+| **Версии промптов** | `PROMPT_VERSION` в `*_prompt.py` | Смена текста промпта инвалидирует старый кэш |
+| **Календарь chunked** | `calendar_signal_runner.py` | В ключ кэша добавляется индекс батча, чтобы чанки с одинаковым событием не путались |
+
+Переменные: `NYSE_LLM_TECHNICAL`, `NYSE_LLM_CALENDAR`, `NYSE_CALENDAR_LLM_BATCH_SIZE`, `NYSE_LLM_CACHE_TTL_SEC` — см. `config.env.example` и `config_loader.py`.
+
+## Пороги гейта (`ThresholdConfig`)
+
+Базовый профиль для бота — **`PROFILE_GAME5M`** (`pipeline/types.py`). Переопределения без правки кода:
+
+| Переменная | Поле |
+|------------|------|
+| `NYSE_GATE_T1` | `t1_abs_draft_bias` |
+| `NYSE_GATE_T2` | `t2_regime_confidence` |
+| `NYSE_GATE_MAX_N` | `max_articles_full_batch` |
+| `NYSE_GATE_REGIME_STRESS_MIN` | `regime_stress_min` |
+
+Читает **`config_loader.get_pipeline_gate_threshold()`** (используется в **`bot/nyse_bot.py`**). Подробности — **`docs/calibration.md`**.
+
+## Telegram (бот и smoke-тесты)
+
+| Переменная | Назначение |
+|------------|------------|
+| `TELEGRAM_BOT_TOKEN` | Токен @BotFather |
+| `TELEGRAM_PROXY` | Прокси для `api.telegram.org`, см. `docs/bot.md` |
+| `TELEGRAM_SIGNAL_CHAT_ID` или `TELEGRAM_SIGNAL_CHAT_IDS` | Чат для `tests/integration/test_telegram_bot_smoke.py` и сигналов |
+
 ## Где конфиг в тестах
 
 - **Юнит-тесты** (`tests/unit/`) **не** читают `config.env` и **не** требуют ключей. Используются только фикстуры из **`tests/conftest.py`**.

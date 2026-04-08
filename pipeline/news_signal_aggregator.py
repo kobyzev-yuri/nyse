@@ -28,7 +28,7 @@ from domain import (
     NewsTimeHorizon,
 )
 
-# Веса — тот же маппинг, что в Kerima (pystockinvest/agent/news/signal.py)
+# Веса — тот же маппинг, что в pystockinvest/agent/news/signal.py
 _RELEVANCE_WEIGHT: dict[NewsRelevance, float] = {
     NewsRelevance.MENTION: 0.4,
     NewsRelevance.RELATED: 0.7,

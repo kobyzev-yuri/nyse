@@ -189,7 +189,7 @@ def test_llm_signal_on_real_game5m_news(require_openai_settings, require_finbert
     Если gate=SKIP/LITE: тест проходит (нет сильного новостного сигнала сейчас).
     Если gate=FULL: запускает реальный gpt-5.4-mini, проверяет структуру ответа.
 
-    KERIM_REPLACE: после интеграции NyseNewsAgent — этот тест переиспользуется с agent.predict().
+    Контракт совпадает с pystockinvest ``NewsSignalAgent`` / ``run_news_signal_pipeline``.
     """
     pytest.importorskip("yfinance")
     from pipeline import (

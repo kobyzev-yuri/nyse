@@ -14,6 +14,8 @@ import html
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from pipeline.trade_builder import W_CAL, W_NEWS, W_TECH
+
 _CSS = """
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -106,28 +108,26 @@ def build_signal_html(
             f'<p class="meta">{_now_str()} · ниже порога confidence/bias</p>'
         )
 
-    # --- Fusion ---
+    # --- Fusion (веса как в pystockinvest: 55% / 30% / 15%) ---
     fusion_html = ""
     if fused is not None:
         fusion_html = "<h2>Fusion</h2><table><thead><tr><th>Агент</th><th>Вес</th><th>Bias</th><th>Contrib</th></tr></thead><tbody>"
-        if fused.news_available:
-            tech_raw = fused.tech_contrib / 0.55
-            fusion_html += (
-                f"<tr><td>Tech (LseHeuristicAgent)</td><td>55%</td>"
-                f'<td class="{"pos" if tech_raw>0 else "neg"}">{tech_raw:+.3f}</td>'
-                f'<td class="{"pos" if fused.tech_contrib>0 else "neg"}">{fused.tech_contrib:+.3f}</td></tr>'
-                f"<tr><td>News (LLM)</td><td>45%</td>"
-                f'<td class="{"pos" if fused.news_contrib/0.45>0 else "neg"}">{fused.news_contrib/0.45:+.3f}</td>'
-                f'<td class="{"pos" if fused.news_contrib>0 else "neg"}">{fused.news_contrib:+.3f}</td></tr>'
-                f"<tr><td><strong>Fused</strong></td><td>100%</td><td>—</td>"
-                f'<td class="{"pos" if fused.value>0 else "neg"}"><strong>{fused.value:+.3f}</strong></td></tr>'
-            )
-        else:
-            fusion_html += (
-                f"<tr><td>Tech-only</td><td>100%</td>"
-                f'<td class="{"pos" if fused.value>0 else "neg"}">{fused.value:+.3f}</td>'
-                f"<td>—</td></tr>"
-            )
+        tech_raw = fused.tech_contrib / W_TECH
+        news_raw = fused.news_contrib / W_NEWS if W_NEWS else 0.0
+        cal_raw = fused.cal_contrib / W_CAL if W_CAL else 0.0
+        fusion_html += (
+            f"<tr><td>Tech (LseHeuristicAgent)</td><td>{int(W_TECH * 100)}%</td>"
+            f'<td class="{"pos" if tech_raw > 0 else "neg"}">{tech_raw:+.3f}</td>'
+            f'<td class="{"pos" if fused.tech_contrib > 0 else "neg"}">{fused.tech_contrib:+.3f}</td></tr>'
+            f"<tr><td>News (LLM)</td><td>{int(W_NEWS * 100)}%</td>"
+            f'<td class="{"pos" if news_raw > 0 else "neg"}">{news_raw:+.3f}</td>'
+            f'<td class="{"pos" if fused.news_contrib > 0 else "neg"}">{fused.news_contrib:+.3f}</td></tr>'
+            f"<tr><td>Calendar</td><td>{int(W_CAL * 100)}%</td>"
+            f'<td class="{"pos" if cal_raw > 0 else "neg"}">{cal_raw:+.3f}</td>'
+            f'<td class="{"pos" if fused.cal_contrib > 0 else "neg"}">{fused.cal_contrib:+.3f}</td></tr>'
+            f"<tr><td><strong>Fused</strong></td><td>100%</td><td>—</td>"
+            f'<td class="{"pos" if fused.value > 0 else "neg"}"><strong>{fused.value:+.3f}</strong></td></tr>'
+        )
         fusion_html += "</tbody></table>"
 
     # --- Tech summary ---
@@ -316,42 +316,39 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     else:
         b1 = (
             f'<h1><span class="none">— NO TRADE</span>  {_h(ticker_val)}</h1>'
-            f'<p class="meta">{ts} · price ${t.current_price:,.2f} · ниже порога confidence/bias</p>'
+            f'<p class="meta">{ts} · price ${t.current_price:,.2f} · '
+            f"нет позиции (tradeability / |final_bias| / уровни)</p>"
         )
 
     # -----------------------------------------------------------------------
-    # Блок 2: Fusion Breakdown
+    # Блок 2: Fusion Breakdown (веса как в pystockinvest: 55% / 30% / 15%)
     # -----------------------------------------------------------------------
     def _fcls(v: float) -> str:
         return "pos" if v > 0 else ("neg" if v < 0 else "neu")
 
-    if fused.news_available:
-        tech_raw  = fused.tech_contrib / 0.55
-        news_raw  = fused.news_contrib / 0.45
-        b2 = (
-            "<h2>② Fusion Breakdown</h2>"
-            "<table><thead><tr><th>Агент</th><th>Вес</th><th>Raw bias</th>"
-            "<th>Contribution</th></tr></thead><tbody>"
-            f"<tr><td>LseHeuristicAgent (tech)</td><td>55%</td>"
-            f'<td class="score {_fcls(tech_raw)}">{tech_raw:+.4f}</td>'
-            f'<td class="score {_fcls(fused.tech_contrib)}">{fused.tech_contrib:+.4f}</td></tr>'
-            f"<tr><td>NewsSignalAgent (LLM)</td><td>45%</td>"
-            f'<td class="score {_fcls(news_raw)}">{news_raw:+.4f}</td>'
-            f'<td class="score {_fcls(fused.news_contrib)}">{fused.news_contrib:+.4f}</td></tr>'
-            f"<tr><td><strong>Fused</strong></td><td>100%</td><td>—</td>"
-            f'<td class="score {_fcls(fused.value)}"><strong>{fused.value:+.4f}</strong>'
-            f" conf={fused.confidence:.2f}</td></tr>"
-            "</tbody></table>"
-        )
-    else:
-        b2 = (
-            "<h2>② Fusion Breakdown</h2>"
-            "<table><thead><tr><th>Агент</th><th>Вес</th><th>Bias</th></tr></thead><tbody>"
-            f"<tr><td>LseHeuristicAgent (tech-only)</td><td>100%</td>"
-            f'<td class="score {_fcls(fused.value)}">{fused.value:+.4f}</td></tr>'
-            "</tbody></table>"
-            '<p class="meta">News: SKIP (gate не запустил LLM)</p>'
-        )
+    tech_raw = fused.tech_contrib / W_TECH
+    news_raw = fused.news_contrib / W_NEWS if W_NEWS else 0.0
+    cal_raw = fused.cal_contrib / W_CAL if W_CAL else 0.0
+    news_note = "" if fused.news_available else '<p class="meta">News LLM: нет агрегата (gate SKIP)</p>'
+    b2 = (
+        "<h2>② Fusion Breakdown</h2>"
+        "<table><thead><tr><th>Агент</th><th>Вес</th><th>Raw bias</th>"
+        "<th>Contribution</th></tr></thead><tbody>"
+        f"<tr><td>LseHeuristicAgent (tech)</td><td>{int(W_TECH * 100)}%</td>"
+        f'<td class="score {_fcls(tech_raw)}">{tech_raw:+.4f}</td>'
+        f'<td class="score {_fcls(fused.tech_contrib)}">{fused.tech_contrib:+.4f}</td></tr>'
+        f"<tr><td>NewsSignalAgent (LLM)</td><td>{int(W_NEWS * 100)}%</td>"
+        f'<td class="score {_fcls(news_raw)}">{news_raw:+.4f}</td>'
+        f'<td class="score {_fcls(fused.news_contrib)}">{fused.news_contrib:+.4f}</td></tr>'
+        f"<tr><td>Calendar</td><td>{int(W_CAL * 100)}%</td>"
+        f'<td class="score {_fcls(cal_raw)}">{cal_raw:+.4f}</td>'
+        f'<td class="score {_fcls(fused.cal_contrib)}">{fused.cal_contrib:+.4f}</td></tr>'
+        f"<tr><td><strong>Fused</strong></td><td>100%</td><td>—</td>"
+        f'<td class="score {_fcls(fused.value)}"><strong>{fused.value:+.4f}</strong>'
+        f" conf={fused.confidence:.2f}</td></tr>"
+        "</tbody></table>"
+        f"{news_note}"
+    )
 
     # -----------------------------------------------------------------------
     # Блок 3: Technical Signal (все score-поля)

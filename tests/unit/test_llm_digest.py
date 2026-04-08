@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-from langchain_core.messages import AIMessage
 
 from config_loader import OpenAISettings
 from pipeline.cache import FileCache
@@ -33,7 +32,7 @@ def test_run_lite_digest_cached_uses_cache_second_time(tmp_path):
     cache = FileCache(tmp_path, default_ttl_sec=86400)
 
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = AIMessage(content="first")
+    mock_llm.invoke.return_value = SimpleNamespace(content="first")
 
     with patch("pipeline.llm_digest.get_chat_model", return_value=mock_llm):
         r1 = run_lite_digest_cached(
@@ -57,7 +56,9 @@ def test_run_lite_digest_cached_uses_cache_second_time(tmp_path):
 def test_run_lite_digest_returns_llm_content(tmp_path):
     cache = FileCache(tmp_path, default_ttl_sec=3600)
     mock_llm = MagicMock()
-    mock_llm.invoke.return_value = AIMessage(content='{"bias": 0.5, "summary": "bullish"}')
+    mock_llm.invoke.return_value = SimpleNamespace(
+        content='{"bias": 0.5, "summary": "bullish"}'
+    )
 
     with patch("pipeline.llm_digest.get_chat_model", return_value=mock_llm):
         result = run_lite_digest_cached(

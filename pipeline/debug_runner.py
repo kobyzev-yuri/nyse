@@ -26,6 +26,9 @@ from pipeline.draft import ScoredArticle, draft_impulse, scored_from_news_articl
 from pipeline.draft import single_scalar_draft_bias
 from pipeline.gates import decide_llm_mode
 from pipeline.llm_batch_plan import plan_llm_article_batch
+import config_loader as _cfg_mod
+
+from pipeline.calendar_llm_agent import CalendarLlmAgent
 from pipeline.trade_builder import neutral_calendar_signal
 from pipeline.news_signal_runner import run_news_signal_pipeline
 from pipeline.sentiment import enrich_cheap_sentiment
@@ -145,7 +148,8 @@ def run_debug_pipeline(
     """
     import config_loader
     from sources.news import Source as NewsSource
-    from pipeline.technical import LseHeuristicAgent
+    from pipeline.calendar_context import build_gate_context
+    from pipeline.technical import LlmTechnicalAgent, LseHeuristicAgent
 
     now = datetime.now(timezone.utc)
     ticker_val = ticker.value
@@ -155,8 +159,13 @@ def run_debug_pipeline(
     m: TickerMetrics = metrics_map[ticker]
 
     # --- L2: технический сигнал ---
-    agent = LseHeuristicAgent()
-    tech = agent.predict(ticker, list(ticker_data_map.values()), metrics_list)
+    s_oai = settings if settings is not None else config_loader.get_openai_settings()
+    if s_oai and _cfg_mod.use_llm_technical_signal():
+        tech = LlmTechnicalAgent(settings=s_oai).predict(
+            ticker, list(ticker_data_map.values()), metrics_list
+        )
+    else:
+        tech = LseHeuristicAgent().predict(ticker, list(ticker_data_map.values()), metrics_list)
 
     # --- L3a: статьи + cheap_sentiment ---
     raw_articles = NewsSource(
@@ -177,13 +186,23 @@ def run_debug_pipeline(
     di = draft_impulse(scored, now=now)
     bias = single_scalar_draft_bias(di)
 
-    # --- L4: Gate ---
-    gate_ctx = GateContext(
+    # --- L4: Gate (календарь HIGH в окне → FULL) ---
+    cal_events: list = []
+    try:
+        from domain import Currency
+        from sources.ecalendar import Source as CalendarSource
+
+        cal_events = CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
+    except Exception:
+        pass
+
+    gate_ctx = build_gate_context(
         draft_bias=bias,
         regime_present=di.regime_stress > profile.regime_stress_min,
         regime_rule_confidence=0.85 if di.regime_stress > profile.regime_stress_min else 0.0,
-        calendar_high_soon=False,
+        calendar_events=cal_events,
         article_count=len(articles),
+        now=now,
     )
     mode = decide_llm_mode(profile, gate_ctx)
     reason = _gate_reason(profile, gate_ctx, mode)
@@ -204,16 +223,24 @@ def run_debug_pipeline(
             settings=s,
         )
 
+    if s is not None and _cfg_mod.use_llm_calendar_signal() and cal_events:
+        calendar_signal = CalendarLlmAgent(
+            settings=s,
+            batch_size=_cfg_mod.calendar_llm_batch_size(),
+        ).predict(ticker, cal_events)
+    else:
+        calendar_signal = neutral_calendar_signal()
+
     # --- L6: Trade ---
     bundle = SignalBundle(
         ticker=ticker,
         technical_signal=tech,
         news_signal=news_signal,
-        calendar_signal=neutral_calendar_signal(),
+        calendar_signal=calendar_signal,
     )
     builder = TradeBuilder()
     trade = builder.build(bundle)
-    fused = builder.fuse_bias(tech, news_signal)
+    fused = builder.fuse_bias(tech, news_signal, calendar_signal)
 
     return PipelineDebugTrace(
         ticker=ticker_val,

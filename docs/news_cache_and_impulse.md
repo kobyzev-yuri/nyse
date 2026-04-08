@@ -73,7 +73,7 @@ DraftImpulse(
 
 Скалярный прокси для гейта: `pipeline/draft.py::single_scalar_draft_bias()`.
 
-### Уровень 5 — LLM (Kerima-стиль)
+### Уровень 5 — LLM (structured, как pystockinvest)
 
 `run_news_signal_pipeline(articles, cfg)` → `AggregatedNewsSignal(bias, confidence, summary, items)`.  
 Вызывается только если гейт вернул `LITE` или `FULL`.  

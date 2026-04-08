@@ -173,6 +173,77 @@ def llm_cache_ttl_sec() -> int:
     return int(float(os.environ.get("NYSE_LLM_CACHE_TTL_SEC") or "86400"))
 
 
+def use_llm_calendar_signal() -> bool:
+    """Включить structured LLM для календаря (``NYSE_LLM_CALENDAR=1``)."""
+    load_config_env()
+    v = (os.environ.get("NYSE_LLM_CALENDAR") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def use_llm_technical_signal() -> bool:
+    """Включить structured LLM для техники вместо эвристик (``NYSE_LLM_TECHNICAL=1``)."""
+    load_config_env()
+    v = (os.environ.get("NYSE_LLM_TECHNICAL") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def calendar_llm_batch_size() -> Optional[int]:
+    """
+    Размер батча событий для календарного LLM (как ``batch_size`` в pystockinvest ``agent/calendar``).
+    None — все события в одном запросе.
+    """
+    load_config_env()
+    raw = (os.environ.get("NYSE_CALENDAR_LLM_BATCH_SIZE") or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+        return n if n > 0 else None
+    except ValueError:
+        return None
+
+
+def get_pipeline_gate_threshold():
+    """
+    Пороги гейта LLM (``ThresholdConfig``) для бота и прод-пайплайна.
+
+    База — ``PROFILE_GAME5M`` из ``pipeline.types``; поля можно переопределить через
+    ``NYSE_GATE_T1``, ``NYSE_GATE_T2``, ``NYSE_GATE_MAX_N``, ``NYSE_GATE_REGIME_STRESS_MIN``
+    (см. ``config.env.example``). Некорректные значения игнорируются.
+    """
+    load_config_env()
+    from pipeline.types import PROFILE_GAME5M, ThresholdConfig
+
+    base = PROFILE_GAME5M
+
+    def _opt_float(key: str, default: float) -> float:
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    def _opt_int(key: str, default: int) -> int:
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    return ThresholdConfig(
+        t1_abs_draft_bias=_opt_float("NYSE_GATE_T1", base.t1_abs_draft_bias),
+        t2_regime_confidence=_opt_float("NYSE_GATE_T2", base.t2_regime_confidence),
+        max_articles_full_batch=_opt_int("NYSE_GATE_MAX_N", base.max_articles_full_batch),
+        regime_stress_min=_opt_float(
+            "NYSE_GATE_REGIME_STRESS_MIN", base.regime_stress_min
+        ),
+    )
+
+
 # ============================================
 # Tickers
 # ============================================

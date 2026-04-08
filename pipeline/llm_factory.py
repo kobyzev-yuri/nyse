@@ -14,13 +14,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from langchain_core.language_models.chat_models import BaseChatModel
-
 if TYPE_CHECKING:
     from config_loader import OpenAISettings
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 
-def get_chat_model(settings: Optional["OpenAISettings"] = None) -> BaseChatModel:
+def get_chat_model(settings: Optional["OpenAISettings"] = None) -> "BaseChatModel":
     """
     Возвращает ``ChatOpenAI`` из настроек конфига.
 
@@ -34,7 +33,7 @@ def get_chat_model(settings: Optional["OpenAISettings"] = None) -> BaseChatModel
         Если ключи API не заданы.
     """
     import config_loader
-    from langchain_openai import ChatOpenAI
+    from langchain_openai import ChatOpenAI  # noqa: PLC0415 — lazy import для тестов без langchain
     from pydantic import SecretStr
 
     s = settings if settings is not None else config_loader.get_openai_settings()

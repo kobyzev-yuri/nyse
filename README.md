@@ -16,10 +16,18 @@ cp config.env.example config.env       # заполни OPENAI_*, ключи API
 python -m pytest tests/unit/ -q        # 140 тестов, без сети
 python -m pytest tests/ -m integration # smoke-тесты (нужна сеть)
 
+# запуск Telegram-бота (long-polling)
+python scripts/run_bot.py
+
 # калибровка гейта на реальных данных
 python scripts/calibrate_gate.py --profile game5m --tickers SNDK NBIS CIEN --days 1
 python scripts/calibrate_gate.py --profile context --tickers MSFT META NVDA --days 3
 ```
+
+### Про запуск бота: `run_bot.py` vs `nyse_bot.py`
+
+- **`scripts/run_bot.py`** — точка входа: подхватывает `config.env`, настраивает логирование, берёт `TELEGRAM_BOT_TOKEN` и запускает `app.run_polling(...)`.
+- **`bot/nyse_bot.py`** — модуль с логикой и хендлерами команд (строит `Application` через `build_application(...)`). Его обычно **не запускают напрямую**.
 
 ---
 
@@ -89,6 +97,9 @@ python scripts/calibrate_gate.py --profile context --tickers MSFT META NVDA --da
 | 3 | `pipeline/draft.py` | оценённые статьи | `DraftImpulse` | — |
 | 4 | `pipeline/gates.py` | `DraftImpulse` + `GateContext` | `LLMMode` | — |
 | 5 | `pipeline/news_signal_runner.py` | отобранные статьи | `AggregatedNewsSignal` | **да** |
+| 6 | `pipeline/trade_builder.py` | `SignalBundle` (tech + news + calendar) | `Trade` | — |
+
+Логика уровня 6 совпадает с **`pystockinvest/agent/trade.py`** (fusion 55/30/15, confidence, LIMIT/MARKET, TP/SL).
 
 ### Уровень 2 — логика `cheap_sentiment`
 
@@ -379,7 +390,7 @@ python scripts/calibrate_gate.py --t1 0.15 --max-n 10 --tickers SNDK MU --days 7
 | Этап | Статус | Содержание |
 |------|--------|-----------|
 | A–G | ✅ | Источники, pipeline уровни 0–5, LLM-гейт, калибровка |
-| Уровень 6 | 🔜 | Слияние `AggregatedNewsSignal` с техническим сигналом |
+| Уровень 6 | ✅ | `TradeBuilder` — логика как в `pystockinvest/agent/trade.py` (fusion 55/30/15, confidence, LIMIT/MARKET, TP/SL от ATR и `volatility_regime`) |
 | G+ | ♻ | Калибровка на реальных ценовых движениях |
 
 Детали — `docs/news_sources_testing_and_pipeline_roadmap.md`.

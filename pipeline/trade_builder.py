@@ -1,17 +1,17 @@
 """
-Уровень 6: TradeBuilder — слияние TechnicalSignal + AggregatedNewsSignal + CalendarSignal
-в единое торговое решение (Trade).
+Уровень 6: TradeBuilder — порт логики ``pystockinvest/agent/trade.py``.
 
-Схема fusion идентична pystockinvest/agent/trade_builder.py для совместимости.
+Слияние TechnicalSignal + AggregatedNewsSignal + CalendarSignal в Trade.
+Веса bias, формула confidence, пороги входа, LIMIT/MARKET, entry и TP/SL по ATR —
+**как в pystockinvest**, для совместимости с общим репозиторием агентов.
 
-    KERIM_REPLACE: веса TECH_WEIGHT / NEWS_WEIGHT могут стать обучаемыми параметрами
-    ML-модели Kerima, которая оценивает reliability каждого агента на историческом backtest.
-    До этого используем фиксированные веса из калибровки.
+Дополнительно (только NYSE): ``FusedBias`` и ``fuse_bias()`` — для отображения
+в Telegram/HTML; числа согласованы с тем же ``final_bias`` и ``_final_confidence``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from domain import (
@@ -26,34 +26,19 @@ from domain import (
     Trade,
 )
 
-# ---------------------------------------------------------------------------
-# Fusion constants (калибровать по результатам backtest)
-# ---------------------------------------------------------------------------
-
-# Веса агентов в fused_bias.
-# При отсутствии news_signal вес перераспределяется на technical.
-TECH_WEIGHT = 0.55
-NEWS_WEIGHT = 0.45
-
-# TP/SL кратность ATR (risk:reward = 2:1)
-TP_ATR_MULT = 2.0
-SL_ATR_MULT = 1.0
-
-# Минимальная fused_confidence для открытия позиции.
-# Ниже → PositionType.NONE (держаться в стороне).
-MIN_CONFIDENCE = 0.55
-
-# Минимальный |fused_bias| для открытия позиции.
-# Слишком слабый сигнал → NONE даже при высокой confidence.
-MIN_ABS_BIAS = 0.15
+# Веса final_bias — как в pystockinvest/agent/trade.py
+W_TECH = 0.55
+W_NEWS = 0.30
+W_CAL = 0.15
 
 
 # ---------------------------------------------------------------------------
-# Нейтральный CalendarSignal (до реализации CalendarAgent)
+# Нейтральный CalendarSignal (нет событий / LLM выключен / нет API-ключа)
 # ---------------------------------------------------------------------------
+
 
 def neutral_calendar_signal() -> CalendarSignal:
-    """Заглушка: нейтральный макрофон без событий календаря."""
+    """Заглушка: нейтральный макрофон без событий."""
     return CalendarSignal(
         broad_equity_bias=0.0,
         rates_pressure=0.0,
@@ -69,159 +54,216 @@ def neutral_calendar_signal() -> CalendarSignal:
 
 
 # ---------------------------------------------------------------------------
-# TradeBuilder
+# FusedBias — для UI (соответствует разложению final_bias)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FusedBias:
-    """Промежуточный результат fusion — удобно для логирования и тестов."""
-    value: float            # [-1, 1]
-    confidence: float       # [0, 1]
-    tech_contrib: float
-    news_contrib: float
-    news_available: bool
+    """Итог fusion и вклады по каналам (55% / 30% / 15%)."""
+
+    value: float  # final_bias ∈ [-1, 1]
+    confidence: float  # _final_confidence
+    tech_contrib: float  # W_TECH * tech.bias
+    news_contrib: float  # W_NEWS * news.bias (0 если нет новостей)
+    cal_contrib: float  # W_CAL * calendar.broad_equity_bias
+    news_available: bool  # AggregatedNewsSignal не None
 
 
 class TradeBuilder:
     """
-    Принимает SignalBundle (tech + news + calendar) → Trade.
+    Как ``pystockinvest.agent.trade.TradeBuilder``::
 
-    Использование::
-
-        builder = TradeBuilder()
-        trade = builder.build(bundle)
-
-    При отсутствии news_signal (gate=SKIP или LLM не вызывался)
-    используется только технический сигнал с весом 1.0.
+        final_bias = 0.55*tech + 0.30*news + 0.15*calendar
+        confidence = f(tech_conf, news_conf, cal_conf, final_bias, cal_risk)
+        позиция при tradeability >= 0.4 и |final_bias| > 0.2 (по знаку LONG/SHORT)
     """
 
-    def __init__(
-        self,
-        tech_weight: float = TECH_WEIGHT,
-        news_weight: float = NEWS_WEIGHT,
-        tp_atr_mult: float = TP_ATR_MULT,
-        sl_atr_mult: float = SL_ATR_MULT,
-        min_confidence: float = MIN_CONFIDENCE,
-        min_abs_bias: float = MIN_ABS_BIAS,
-    ) -> None:
-        self.tech_weight = tech_weight
-        self.news_weight = news_weight
-        self.tp_atr_mult = tp_atr_mult
-        self.sl_atr_mult = sl_atr_mult
-        self.min_confidence = min_confidence
-        self.min_abs_bias = min_abs_bias
+    def build(self, signals: SignalBundle) -> Trade:
+        tech_bias = signals.technical_signal.bias
+        news_bias = signals.news_signal.bias if signals.news_signal is not None else 0.0
+        calendar_bias = signals.calendar_signal.broad_equity_bias
+        calendar_risk = signals.calendar_signal.upcoming_event_risk
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        final_bias = W_TECH * tech_bias + W_NEWS * news_bias + W_CAL * calendar_bias
 
-    def build(self, bundle: SignalBundle) -> Trade:
-        fused = self._fuse(bundle.technical_signal, bundle.news_signal)
-        position, entry_type = self._position(
-            fused, bundle.technical_signal, bundle.ticker
+        confidence = self._final_confidence(
+            technical_signal=signals.technical_signal,
+            news_signal=signals.news_signal,
+            calendar_signal=signals.calendar_signal,
+            final_bias=final_bias,
         )
+
+        entry_type = self._entry_type(
+            technical_signal=signals.technical_signal,
+            news_signal=signals.news_signal,
+            calendar_risk=calendar_risk,
+        )
+
+        position = self._build_position(
+            signals=signals,
+            final_bias=final_bias,
+            confidence=confidence,
+        )
+
         return Trade(
-            ticker=bundle.ticker,
-            entry_type=entry_type,
+            ticker=signals.ticker,
+            entry_type=entry_type if position else PositionType.NONE,
             position=position,
-            technical_summary=list(bundle.technical_signal.summary),
-            news_summary=self._news_summary(bundle.news_signal, fused),
-            calendar_summary=list(bundle.calendar_signal.summary),
+            technical_summary=list(signals.technical_signal.summary),
+            news_summary=(
+                list(signals.news_signal.summary)
+                if signals.news_signal is not None
+                else []
+            ),
+            calendar_summary=list(signals.calendar_signal.summary),
         )
 
     def fuse_bias(
         self,
         tech: TechnicalSignal,
         news: Optional[AggregatedNewsSignal],
+        calendar: Optional[CalendarSignal] = None,
     ) -> FusedBias:
-        """Публичный метод fusion — удобен для тестов и логирования."""
-        return self._fuse(tech, news)
+        """
+        Тот же ``final_bias`` и ``_final_confidence``, что и в ``build``,
+        для логирования и Telegram. Если ``calendar`` не передан — neutral.
+        """
+        cal = calendar if calendar is not None else neutral_calendar_signal()
+        tech_b = tech.bias
+        news_b = news.bias if news is not None else 0.0
+        cal_b = cal.broad_equity_bias
 
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
+        value = W_TECH * tech_b + W_NEWS * news_b + W_CAL * cal_b
+        value = _clip(value)
 
-    def _fuse(
-        self,
-        tech: TechnicalSignal,
-        news: Optional[AggregatedNewsSignal],
-    ) -> FusedBias:
-        if news is not None:
-            w_t = self.tech_weight
-            w_n = self.news_weight
-            value = w_t * tech.bias + w_n * news.bias
-            conf  = w_t * tech.confidence + w_n * news.confidence
-            return FusedBias(
-                value=_clip(value),
-                confidence=_clip(conf),
-                tech_contrib=round(w_t * tech.bias, 4),
-                news_contrib=round(w_n * news.bias, 4),
-                news_available=True,
-            )
-        # news недоступен → 100% технический сигнал
-        return FusedBias(
-            value=_clip(tech.bias),
-            confidence=_clip(tech.confidence),
-            tech_contrib=round(tech.bias, 4),
-            news_contrib=0.0,
-            news_available=False,
+        conf = self._final_confidence(
+            technical_signal=tech,
+            news_signal=news,
+            calendar_signal=cal,
+            final_bias=value,
         )
 
-    def _position(
-        self,
-        fused: FusedBias,
-        tech: TechnicalSignal,
-        ticker: Ticker,
-    ) -> tuple[Optional[Position], PositionType]:
-        """
-        Вычисляет Position и PositionType из fused bias.
-        entry/TP/SL считаются от текущей цены ± ATR.
-        """
-        # Недостаточная уверенность или слабый сигнал → NONE
-        if fused.confidence < self.min_confidence or abs(fused.value) < self.min_abs_bias:
-            return None, PositionType.NONE
-
-        price = tech.target_snapshot.data.current_price
-        atr   = tech.target_snapshot.metrics.atr
-        if price <= 0 or atr <= 0:
-            return None, PositionType.NONE
-
-        side = Direction.LONG if fused.value > 0 else Direction.SHORT
-
-        if side == Direction.LONG:
-            entry       = price
-            take_profit = round(price + self.tp_atr_mult * atr, 2)
-            stop_loss   = round(price - self.sl_atr_mult * atr, 2)
-        else:
-            entry       = price
-            take_profit = round(price - self.tp_atr_mult * atr, 2)
-            stop_loss   = round(price + self.sl_atr_mult * atr, 2)
-
-        return (
-            Position(
-                side=side,
-                entry=round(entry, 2),
-                take_profit=take_profit,
-                stop_loss=stop_loss,
-                confidence=round(fused.confidence, 4),
-            ),
-            PositionType.MARKET,
+        return FusedBias(
+            value=value,
+            confidence=conf,
+            tech_contrib=round(W_TECH * tech_b, 4),
+            news_contrib=round(W_NEWS * news_b, 4),
+            cal_contrib=round(W_CAL * cal_b, 4),
+            news_available=news is not None,
         )
 
     @staticmethod
-    def _news_summary(
-        news: Optional[AggregatedNewsSignal],
-        fused: FusedBias,
-    ) -> list[str]:
-        if news is None:
-            return [f"Новостной сигнал: нет (news_contrib=0, tech-only fusion)."]
-        lines = list(news.summary)
-        lines.append(
-            f"News fusion contrib: {fused.news_contrib:+.3f} "
-            f"(bias={news.bias:+.3f}, conf={news.confidence:.2f}, "
-            f"items={len(news.items)})"
+    def _final_confidence(
+        technical_signal: TechnicalSignal,
+        news_signal: Optional[AggregatedNewsSignal],
+        calendar_signal: CalendarSignal,
+        final_bias: float,
+    ) -> float:
+        tech_conf = technical_signal.confidence
+        news_conf = news_signal.confidence if news_signal is not None else 0.0
+        cal_conf = calendar_signal.confidence
+        cal_risk = calendar_signal.upcoming_event_risk
+
+        agreement_bonus = min(abs(final_bias), 1.0) * 0.15
+        raw = 0.50 * tech_conf + 0.30 * news_conf + 0.20 * cal_conf + agreement_bonus
+        penalized = raw * (1.0 - 0.35 * cal_risk)
+        return max(0.0, min(1.0, penalized))
+
+    def _build_position(
+        self,
+        signals: SignalBundle,
+        final_bias: float,
+        confidence: float,
+    ) -> Optional[Position]:
+        technical_signal = signals.technical_signal
+        snapshot = signals.technical_signal.target_snapshot
+
+        if technical_signal.tradeability_score < 0.40:
+            return None
+
+        if final_bias > 0.20:
+            side = Direction.LONG
+        elif final_bias < -0.20:
+            side = Direction.SHORT
+        else:
+            return None
+
+        entry = self._entry_price(
+            side=side,
+            entry_type=self._entry_type(
+                technical_signal=signals.technical_signal,
+                news_signal=signals.news_signal,
+                calendar_risk=signals.calendar_signal.upcoming_event_risk,
+            ),
+            current_price=snapshot.data.current_price,
+            atr=snapshot.metrics.atr,
         )
-        return lines
+
+        stop_loss, take_profit = self._risk_levels(
+            side=side,
+            entry=entry,
+            atr=snapshot.metrics.atr,
+            volatility_regime=technical_signal.volatility_regime,
+        )
+
+        return Position(
+            side=side,
+            entry=entry,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            confidence=confidence,
+        )
+
+    @staticmethod
+    def _entry_type(
+        technical_signal: TechnicalSignal,
+        news_signal: Optional[AggregatedNewsSignal],
+        calendar_risk: float,
+    ) -> PositionType:
+        breakout_preferred = (
+            abs(technical_signal.breakout_score)
+            >= abs(technical_signal.mean_reversion_score)
+            and technical_signal.exhaustion_score < 0.65
+            and calendar_risk < 0.75
+        )
+        urgent_news = abs(news_signal.bias) > 0.40 if news_signal is not None else False
+
+        if breakout_preferred and urgent_news:
+            return PositionType.MARKET
+        return PositionType.LIMIT
+
+    @staticmethod
+    def _entry_price(
+        side: Direction,
+        entry_type: PositionType,
+        current_price: float,
+        atr: float,
+    ) -> float:
+        if entry_type == PositionType.MARKET:
+            return round(current_price, 4)
+        if side == Direction.LONG:
+            return round(current_price - 0.25 * atr, 4)
+        return round(current_price + 0.25 * atr, 4)
+
+    @staticmethod
+    def _risk_levels(
+        side: Direction,
+        entry: float,
+        atr: float,
+        volatility_regime: float,
+    ) -> tuple[float, float]:
+        stop_mult = 1.0 + 0.4 * volatility_regime
+        tp_mult = 1.8 + 0.5 * (1.0 - volatility_regime)
+
+        if side == Direction.LONG:
+            stop_loss = entry - stop_mult * atr
+            take_profit = entry + tp_mult * atr
+        else:
+            stop_loss = entry + stop_mult * atr
+            take_profit = entry - tp_mult * atr
+
+        return round(stop_loss, 4), round(take_profit, 4)
 
 
 def _clip(x: float, lo: float = -1.0, hi: float = 1.0) -> float:

@@ -78,8 +78,8 @@ def test_news_signal_pipeline_real_yahoo_news(require_openai_settings, tmp_path)
       3. run_news_signal_pipeline → FULL с реальным LLM-вызовом
       4. Проверка диапазонов bias / confidence
 
-    KERIM_REPLACE: тот же тест применим к NyseNewsAgent-обёртке после интеграции
-    с pystockinvest, замена run_news_signal_pipeline на agent.predict() прозрачна.
+    Тот же сценарий можно вызвать через pystockinvest ``NewsSignalAgent.predict`` —
+    контракт DTO совпадает.
     """
     pytest.importorskip("yfinance")
     from domain import Ticker

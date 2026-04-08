@@ -1,22 +1,8 @@
 """
 Уровень 6: технический агент — эвристический baseline (без БД, без LLM).
 
-─────────────────────────────────────────────────────────────────────────────
-KERIM_REPLACE: весь этот класс является временным baseline.
-  Замена на ML-агент Kerima — однострочная:
-
-    # Было:
-    from pipeline.technical import LseHeuristicAgent
-    technical_agent = LseHeuristicAgent()
-
-    # Станет (pystockinvest/agent/market/agent.py):
-    from pystockinvest.agent.market.agent import Agent as KerimsAgent
-    from pipeline.llm_factory import get_chat_model
-    technical_agent = KerimsAgent(llm=get_chat_model())
-
-  Интерфейс Protocol идентичен — замена прозрачна для TradeBuilder:
-    predict(ticker, ticker_data, metrics) -> TechnicalSignal
-─────────────────────────────────────────────────────────────────────────────
+Структured-альтернатива с тем же ``TechnicalAgentProtocol``: ``LlmTechnicalAgent``
+(как ``pystockinvest/agent/market/agent.py``). В боте: ``NYSE_LLM_TECHNICAL=1``.
 
 Логика: SMA/RSI/vol-based rules из lse/analyst_agent.py, переработанные в
 score-поля TechnicalSignal. Нет PostgreSQL, нет ML-модели.
@@ -95,11 +81,8 @@ class LseHeuristicAgent:
 
     Контекстные тикеры (SMH, QQQ) используются для ``market_alignment_score``.
 
-    .. note::
-        KERIM_REPLACE: все score-поля (trend, momentum, breakout и т.д.) здесь
-        рассчитаны эвристически. В агенте Kerima те же поля генерирует LLM через
-        ``with_structured_output(dto.TechnicalSignalResponse)``.
-        Формула ``_technical_bias`` — общая, взята из pystockinvest дословно.
+    Score-поля совпадают по смыслу с ``TechnicalSignalResponse`` (``pipeline.market_dto``);
+    при LLM они приходят из structured output (промпт: ``pipeline.technical_signal_prompt``).
     """
 
     # Рыночные индикаторы для market_alignment; если есть — используем их sma20_pct.

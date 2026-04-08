@@ -8,7 +8,7 @@ Telegram-бот для анализа тикеров из списка `GAME_5M`
 ## Запуск
 
 ```bash
-cd /media/cnn/home/cnn/lse/nyse
+cd /path/to/nyse   # корень репозитория nyse
 conda run -n py11 python scripts/run_bot.py
 ```
 
@@ -31,11 +31,11 @@ conda run -n py11 python scripts/run_bot.py
 **Pipeline:**
 ```
 L0-L1  yfinance + Finviz → TickerData, TickerMetrics
-L2     LseHeuristicAgent → TechnicalSignal        ← KERIM_REPLACE
+L2     LseHeuristicAgent или LlmTechnicalAgent (NYSE_LLM_TECHNICAL=1) → TechnicalSignal
 L3     Yahoo News → FinBERT → DraftImpulse
-L4     Gate → LLMMode (SKIP/LITE/FULL)
-L5     LLM (если FULL/LITE) → AggregatedNewsSignal
-L6     TradeBuilder → Trade (Entry/TP/SL)
+L4     Gate (+ calendar_high_soon из ecalendar) → LLMMode (SKIP/LITE/FULL)
+L5     LLM новостей (если FULL/LITE) → AggregatedNewsSignal
+L6     TradeBuilder (+ CalendarLlmAgent при NYSE_LLM_CALENDAR=1) → Trade
 ```
 
 ---
@@ -70,7 +70,7 @@ L6     TradeBuilder → Trade (Entry/TP/SL)
 | # | Секция | Что показывает |
 |---|--------|---------------|
 | ① | Trade Signal | Entry/TP/SL/conf по шаблону Керима |
-| ② | Fusion Breakdown | вклад Tech (55%) и News LLM (45%) |
+| ② | Fusion Breakdown | вклад Tech (55%), News LLM (30%), Calendar (15%) — как в `pystockinvest/agent/trade.py` |
 | ③ | Technical Signal | все 12 score-полей с визуальным баром |
 | ④ | Articles + cheap_sentiment | заголовки, канал INC/REG/POL, score, флаг ✓→LLM |
 | ⑤ | DraftImpulse | per-channel: count, weight sum, bias, max\|sentiment\| |
@@ -115,6 +115,9 @@ pipeline/
   ├── draft.py              ← draft_impulse(), MultiTickerGateSession
   ├── sentiment.py          ← enrich_cheap_sentiment(), price_pattern_boost
   ├── news_signal_runner.py ← run_news_signal_pipeline()
+  ├── calendar_signal_runner.py, calendar_llm_agent.py
+  ├── technical_signal_runner.py, technical/llm_technical_agent.py
+  ├── llm_cache.py, lc_shim.py  ← кэш completion, shim сообщений LangChain
   └── types.py              ← PROFILE_GAME5M, PROFILE_CONTEXT, ThresholdConfig
 ```
 
@@ -145,7 +148,13 @@ result = await loop.run_in_executor(None, partial(_worker_signal, ticker_str))
 | `HF_TOKEN` | Hugging Face для загрузки FinBERT |
 | `NYSE_GAME5M_TICKERS` | список через запятую, дефолт `SNDK,NBIS,ASML,MU,LITE,CIEN` |
 | `NYSE_CONTEXT_TICKERS` | контекстные тикеры (SMH, QQQ) |
-| `NYSE_LLM_CACHE_TTL_SEC` | TTL кэша LLM-ответов, дефолт 3600 |
+| `NYSE_LLM_CACHE_TTL_SEC` | TTL кэша LLM-ответов (новости, техника, календарь), см. `llm_cache.py` |
+| `NYSE_LLM_TECHNICAL` | `1` / `true` — structured LLM для техники (`LlmTechnicalAgent`) |
+| `NYSE_LLM_CALENDAR` | `1` / `true` — structured LLM для календаря (`CalendarLlmAgent`) |
+| `NYSE_CALENDAR_LLM_BATCH_SIZE` | необязательно: размер батча событий календаря (как в pystockinvest) |
+| `TELEGRAM_SIGNAL_CHAT_ID` | chat для интеграционных тестов бота (`tests/integration/test_telegram_bot_smoke.py`) |
+
+**Экономия токенов:** гейт L4 (`SKIP` / `LITE` / `FULL`) не вызывает полный news-LLM при слабом сигнале; ответы кэшируются по хешу промпта + модели (`cache_key_llm`). Календарь: при chunked-событиях ключ включает номер батча, чтобы не смешивать ответы. См. `docs/configuration.md`.
 
 ---
 
@@ -166,58 +175,11 @@ TELEGRAM_PROXY=socks5h://127.0.0.1:1080
 
 ---
 
-## KERIM_REPLACE — маркеры для интеграции
+## Соответствие pystockinvest и TradeBuilder
 
-В коде расставлены комментарии `# KERIM_REPLACE` в местах, где предполагается
-замена baseline-агента на ML-агент Керима:
-
-### `bot/nyse_bot.py` — `_worker_scan` и `_worker_signal`
-
-```python
-# KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
-#   from pystockinvest.agent.market.agent import Agent as KerimsAgent
-#   from pipeline.llm_factory import get_chat_model
-#   agent = KerimsAgent(llm=get_chat_model())
-#   Интерфейс predict(ticker, ticker_data, metrics) → TechnicalSignal идентичен.
-agent = LseHeuristicAgent()
-```
-
-### `pipeline/debug_runner.py` — `run_debug_pipeline`
-
-Та же замена, плюс опционально передать кастомный `profile`:
-
-```python
-trace = run_debug_pipeline(
-    ticker, ticker_data, metrics_list,
-    profile=PROFILE_GAME5M,   # или PROFILE_CONTEXT для крупных тикеров
-    settings=oai,
-)
-```
-
-### `pipeline/trade_builder.py` — веса fusion
-
-```python
-# KERIM_REPLACE: TECH_WEIGHT и NEWS_WEIGHT → обучаемые параметры
-TECH_WEIGHT = 0.55
-NEWS_WEIGHT = 0.45
-```
-
-### `TechnicalAgentProtocol`
-
-Формальный контракт агента — `pipeline/technical/protocol.py`:
-
-```python
-class TechnicalAgentProtocol(Protocol):
-    def predict(
-        self,
-        ticker: Ticker,
-        ticker_data: List[TickerData],
-        metrics: List[TickerMetrics],
-    ) -> TechnicalSignal: ...
-```
-
-`LseHeuristicAgent` и `KerimsAgent` оба соответствуют этому протоколу.
-Замена прозрачна для `TradeBuilder` и `_worker_signal`.
+- **Слияние сигналов** — `pipeline/trade_builder.py`: веса **`W_TECH` / `W_NEWS` / `W_CAL`**, `_final_confidence`, LIMIT/MARKET, TP/SL — как **`pystockinvest/agent/trade.py`**. Менять веса только синхронно с pystockinvest.
+- **Технический агент** — `TechnicalAgentProtocol` (`pipeline/technical/protocol.py`): реализуют `LseHeuristicAgent`, `LlmTechnicalAgent`, агент market в pystockinvest.
+- **Debug** — `run_debug_pipeline(..., profile=PROFILE_GAME5M, settings=oai)` в `pipeline/debug_runner.py`.
 
 ---
 
@@ -227,6 +189,18 @@ class TechnicalAgentProtocol(Protocol):
 2. Добавить в `NYSE_GAME5M_TICKERS` или `NYSE_CONTEXT_TICKERS` в `config.env`
 3. Запустить `/news_signal НОВЫЙ_ТИКЕР` для оценки объёма новостного покрытия
 4. При необходимости откалибровать профиль (см. `docs/calibration.md`, Сценарий E)
+
+---
+
+## Промпты LLM и соответствие pystockinvest
+
+| Назначение | NYSE | pystockinvest | Совпадение |
+|------------|------|---------------|------------|
+| Новостной structured signal (L5 FULL) | `pipeline/news_signal_prompt.py` | `agent/news/signal.py` | **Да**; `PROMPT_VERSION` в промпте — смена ключа кэша |
+| Lite-дайджест (LITE) | `pipeline/llm_digest.py` | — | Только NYSE (JSON bias/summary) |
+| Отбор батча перед LLM | `pipeline/llm_batch_plan.py` | `agent/news/selection.py` (LLM) | NYSE: правила + \|sentiment\|, без LLM-selection |
+| Техника | `LseHeuristicAgent` / `LlmTechnicalAgent` + `technical_signal_*` | `agent/market/agent.py` | DTO/промпты как в pystockinvest |
+| Календарь | `neutral_*` или `CalendarLlmAgent` + `calendar_signal_*` | `agent/calendar/agent.py` | DTO/промпты как в pystockinvest |
 
 ---
 

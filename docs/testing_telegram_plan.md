@@ -56,7 +56,7 @@ pytest tests/ -q
 
 ### Зачем
 
-Живая отладка пайплайна без написания скрипта: `/news AAPL` → видишь заголовки + bias + решение гейта. Аналог `cmd/telegram_bot.py` в pystockinvest/Kerima.
+Живая отладка пайплайна без написания скрипта: `/news AAPL` → видишь заголовки + bias + решение гейта. Аналог `cmd/telegram_bot.py` в pystockinvest.
 
 ### Команды (минимум)
 
@@ -77,7 +77,7 @@ nyse/
 
 Зависимость: `python-telegram-bot>=20` (добавить в `pyproject.toml [project.optional-dependencies] telegram`).  
 Токен: `TELEGRAM_BOT_TOKEN` в `config.env`.  
-Безопасность: `ALLOWED_CHAT_IDS` — whitelist, те же паттерны что в Kerima.
+Безопасность: `ALLOWED_CHAT_IDS` — whitelist, те же паттерны что в pystockinvest-боте.
 
 Если LLM-ключа нет — отвечать только данными уровней 1–4 (без LLM-summary).
 

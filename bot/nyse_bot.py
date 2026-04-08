@@ -10,11 +10,12 @@ NyseBot — Telegram-бот для nyse news+technical pipeline.
     /status         — статус рынка (NYSE open/closed)
 
 Запуск:
-    cd /media/cnn/home/cnn/lse/nyse
+    cd /path/to/nyse
     conda run -n py11 python scripts/run_bot.py
 
-KERIM_REPLACE: в _worker_scan и _worker_signal заменить LseHeuristicAgent
-на KerimsAgent — одна строка, интерфейс predict() идентичен.
+Structured LLM (как pystockinvest): ``NYSE_LLM_TECHNICAL=1`` — ``LlmTechnicalAgent``;
+``NYSE_LLM_CALENDAR=1`` — ``CalendarLlmAgent`` (см. ``config_loader``).
+По умолчанию техника — ``LseHeuristicAgent``, календарь — нейтральный сигнал без LLM.
 """
 
 from __future__ import annotations
@@ -70,6 +71,21 @@ def _h(text: str) -> str:
 # Общий хелпер загрузки рыночных данных
 # Используется в _worker_scan и _worker_signal.
 # ---------------------------------------------------------------------------
+
+def _load_calendar_events():
+    """
+    Экономический календарь (Investing.com API), тот же источник, что в pystockinvest ``sources.ecalendar``.
+    При ошибке сети / парсинга возвращает пустой список.
+    """
+    try:
+        from domain import Currency
+        from sources.ecalendar import Source as CalendarSource
+
+        return CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
+    except Exception:
+        log.warning("ecalendar: не удалось загрузить события", exc_info=True)
+        return []
+
 
 def _load_market_data(fetch: list) -> Tuple[dict, list]:
     """
@@ -137,11 +153,7 @@ def _worker_scan() -> Tuple[str, str]:
     if not ticker_data:
         return "yfinance не вернул данных.", ""
 
-    # KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
-    #   from pystockinvest.agent.market.agent import Agent as KerimsAgent
-    #   from pipeline.llm_factory import get_chat_model
-    #   agent = KerimsAgent(llm=get_chat_model())
-    #   Интерфейс predict(ticker, ticker_data, metrics) → TechnicalSignal идентичен.
+    # /scan — только быстрые эвристики (без LLM); /signal может использовать LlmTechnicalAgent.
     agent   = LseHeuristicAgent()
     td_list = list(ticker_data.values())
 
@@ -166,28 +178,33 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
 
     Уровни:
         L0-L1  yfinance + Finviz → TickerData, TickerMetrics
-        L2     LseHeuristicAgent → TechnicalSignal
+        L2     LseHeuristicAgent или LlmTechnicalAgent (см. NYSE_LLM_TECHNICAL) → TechnicalSignal
         L3-L4  Yahoo News → FinBERT → DraftImpulse → Gate (SKIP/LITE/FULL)
-        L5     LLM (если gate=FULL/LITE) → AggregatedNewsSignal
-        L6     TradeBuilder → Trade
+        L5     LLM новостей (если gate=FULL/LITE) → AggregatedNewsSignal
+        L6     TradeBuilder (+ CalendarLlmAgent при NYSE_LLM_CALENDAR) → Trade
 
     Returns
     -------
     (short_text, html_content) — краткое сообщение в чат + HTML-отчёт для reply_document.
     """
+    from datetime import datetime, timezone
+
     from domain import SignalBundle, TickerData  # noqa: F401 (TickerData нужен _load_market_data)
     from sources.news import Source as NewsSource
-    from pipeline.technical import LseHeuristicAgent
+    from pipeline.calendar_llm_agent import CalendarLlmAgent
+    from pipeline.technical import LlmTechnicalAgent, LseHeuristicAgent
     from pipeline.sentiment import enrich_cheap_sentiment
     from pipeline.draft import scored_from_news_articles
     from pipeline import (
+        build_gate_context,
         draft_impulse, single_scalar_draft_bias,
-        GateContext, decide_llm_mode, PROFILE_GAME5M,
+        decide_llm_mode,
         TradeBuilder, neutral_calendar_signal,
         format_trade, run_news_signal_pipeline,
     )
     from pipeline.html_report import build_signal_html
 
+    gate_cfg = config_loader.get_pipeline_gate_threshold()
     ticker = _make_ticker(ticker_str)
 
     game5m  = config_loader.get_game5m_tickers()
@@ -198,13 +215,16 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
     if ticker not in ticker_data:
         return f"Нет данных yfinance для {ticker_str.upper()}.", ""
 
-    # --- L2: технический сигнал ---
-    # KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
-    #   from pystockinvest.agent.market.agent import Agent as KerimsAgent
-    #   from pipeline.llm_factory import get_chat_model
-    #   agent = KerimsAgent(llm=get_chat_model())
-    agent = LseHeuristicAgent()
-    sig   = agent.predict(ticker, list(ticker_data.values()), metrics_list)
+    cal_events = _load_calendar_events()
+    oai = config_loader.get_openai_settings()
+
+    # --- L2: технический сигнал (эвристика или structured LLM — NYSE_LLM_TECHNICAL=1) ---
+    if oai and config_loader.use_llm_technical_signal():
+        tech_agent = LlmTechnicalAgent(settings=oai)
+        sig = tech_agent.predict(ticker, list(ticker_data.values()), metrics_list)
+    else:
+        tech_agent = LseHeuristicAgent()
+        sig = tech_agent.predict(ticker, list(ticker_data.values()), metrics_list)
 
     # --- L3: загрузка новостей и cheap_sentiment (FinBERT / API / price_pattern_boost) ---
     articles = NewsSource(max_per_ticker=12, lookback_hours=72).get_articles([ticker])
@@ -216,38 +236,48 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
     di     = draft_impulse(scored)
     bias   = single_scalar_draft_bias(di)
 
-    # --- L4: гейт — решаем нужен ли LLM ---
-    gate_ctx = GateContext(
+    # --- L4: гейт — решаем нужен ли LLM новостей (календарь влияет на FULL) ---
+    gate_ctx = build_gate_context(
         draft_bias=bias,
-        regime_present=di.regime_stress > PROFILE_GAME5M.regime_stress_min,
-        regime_rule_confidence=0.85 if di.regime_stress > PROFILE_GAME5M.regime_stress_min else 0.0,
-        calendar_high_soon=False,  # CalendarAgent — заглушка (KERIM_REPLACE: neutral_calendar_signal)
+        regime_present=di.regime_stress > gate_cfg.regime_stress_min,
+        regime_rule_confidence=0.85 if di.regime_stress > gate_cfg.regime_stress_min else 0.0,
+        calendar_events=cal_events,
         article_count=len(articles),
+        now=datetime.now(timezone.utc),
     )
-    mode = decide_llm_mode(PROFILE_GAME5M, gate_ctx)
+    mode = decide_llm_mode(gate_cfg, gate_ctx)
 
     # --- L5: LLM-агрегация новостей (только если gate=FULL или LITE) ---
     news_signal = None
     if mode.value in ("full", "lite"):
-        oai = config_loader.get_openai_settings()
         if oai:
             news_signal = run_news_signal_pipeline(
                 articles, ticker.value,
-                cfg=PROFILE_GAME5M,
+                cfg=gate_cfg,
                 mode=mode,
                 settings=oai,
             )
+
+    # --- L6: календарь (нейтраль или structured LLM — NYSE_LLM_CALENDAR=1) ---
+    if oai and config_loader.use_llm_calendar_signal() and cal_events:
+        cal_agent = CalendarLlmAgent(
+            settings=oai,
+            batch_size=config_loader.calendar_llm_batch_size(),
+        )
+        calendar_signal = cal_agent.predict(ticker, cal_events)
+    else:
+        calendar_signal = neutral_calendar_signal()
 
     # --- L6: fusion → Trade ---
     bundle = SignalBundle(
         ticker=ticker,
         technical_signal=sig,
         news_signal=news_signal,
-        calendar_signal=neutral_calendar_signal(),
+        calendar_signal=calendar_signal,
     )
     builder = TradeBuilder()
     trade   = builder.build(bundle)
-    fused   = builder.fuse_bias(sig, news_signal)
+    fused   = builder.fuse_bias(sig, news_signal, calendar_signal)
 
     short_text = format_trade(trade, fused=fused, include_details=True)
     html_content = build_signal_html(trade, fused=fused, articles=articles)
