@@ -12,11 +12,18 @@
 Нужно в config.env (см. ``config.env.example``):
     TELEGRAM_BOT_TOKEN=<токен от @BotFather>
     TELEGRAM_SIGNAL_CHAT_ID=<числовой chat_id>  (или TELEGRAM_SIGNAL_CHAT_IDS=id1,id2)
+
+Если Telegram только через локальный SOCKS (типично порт 1080), задайте то же, что для бота:
+    TELEGRAM_PROXY=socks5h://127.0.0.1:1080
+
+Для SOCKS в ``requests`` нужен PySocks: ``pip install PySocks`` или ``pip install -e ".[dev]"``.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
+import re
 
 import pytest
 import requests
@@ -26,13 +33,42 @@ _TG_API = "https://api.telegram.org/bot{token}/{method}"
 _TIMEOUT = 15
 
 
+def _redact_telegram_url(msg: str) -> str:
+    """Не светим токен бота в логах skip (в URL бывает /bot<token>/...)."""
+    return re.sub(r"/bot[^/\s]+/", "/bot***/", msg)
+
+
+def _telegram_session_proxies():
+    """
+    Те же прокси, что ``run_bot.py`` / ``HTTPXRequest(proxy=...)`` — из TELEGRAM_PROXY.
+    """
+    import config_loader
+
+    raw = config_loader.get_telegram_proxy()
+    if not raw:
+        return None
+    # SOCKS5: нужен PySocks (см. optional-dependencies dev)
+    if raw.lower().startswith("socks"):
+        try:
+            import socks  # noqa: F401 — PySocks регистрирует схему для urllib3
+        except ImportError:
+            pytest.skip(
+                "TELEGRAM_PROXY указывает на SOCKS — установите PySocks: "
+                "pip install PySocks  (или pip install -e \".[dev]\")"
+            )
+    return {"http": raw, "https": raw}
+
+
 def _tg(token: str, method: str, **kwargs) -> dict:
     """Вызов Telegram Bot API. Бросает RuntimeError при ошибке."""
     url = _TG_API.format(token=token, method=method)
+    proxies = _telegram_session_proxies()
     try:
-        r = requests.post(url, json=kwargs, timeout=_TIMEOUT)
+        r = requests.post(
+            url, json=kwargs, timeout=_TIMEOUT, proxies=proxies
+        )
     except requests.exceptions.RequestException as exc:
-        pytest.skip(f"Telegram API недоступен: {exc}")
+        pytest.skip(f"Telegram API недоступен: {_redact_telegram_url(str(exc))}")
     data = r.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram {method} failed: {data}")
