@@ -327,3 +327,20 @@ def get_telegram_proxy() -> Optional[str]:
     load_config_env()
     v = (os.environ.get("TELEGRAM_PROXY") or "").strip()
     return v or None
+
+
+def get_news_rss_feed_urls() -> list[str]:
+    """
+    URL RSS/Atom для ``sources.news_merge`` (переменная ``NYSE_NEWS_RSS_URLS``).
+    Несколько адресов через запятую или с новой строки.
+    """
+    load_config_env()
+    raw = (os.environ.get("NYSE_NEWS_RSS_URLS") or "").strip()
+    if not raw:
+        return []
+    out: list[str] = []
+    for line in raw.replace(",", "\n").splitlines():
+        s = line.strip()
+        if s:
+            out.append(s)
+    return out

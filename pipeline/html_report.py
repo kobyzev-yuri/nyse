@@ -591,10 +591,12 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         ts_a = a.timestamp.strftime("%m-%d %H:%M") if a.timestamp else "—"
         in_llm = "✓" if a in t.llm_batch_articles else ""
         summ = _h((a.summary or "")[:120])
+        prov = getattr(a, "provider_id", None) or "—"
         art_rows += (
             f"<tr>"
             f"<td>{i}</td>"
             f'<td><span class="tag">{_h(ch[:3].upper())}</span></td>'
+            f'<td><span class="tag">{_h(str(prov))}</span></td>'
             f"<td>{_h(a.title)}"
             + (f"<br><small style='color:#8b949e'>{summ}</small>" if summ else "")
             + f"</td>"
@@ -608,7 +610,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         f"<h2>④ L3 — Статьи + cheap_sentiment ({len(t.articles)} статей, "
         f"lookback {t.profile.max_articles_full_batch*6}h)</h2>"
         "<table><thead><tr>"
-        "<th>#</th><th>Канал</th><th>Заголовок / Summary</th>"
+        "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок / Summary</th>"
         "<th>Score</th><th>Время</th><th>→LLM</th>"
         "</tr></thead><tbody>"
         + art_rows

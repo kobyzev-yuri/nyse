@@ -27,6 +27,20 @@
 
 Приоритет: уже заданные переменные окружения **не перезаписываются** файлами.
 
+## Новости (несколько провайдеров)
+
+Бот и пайплайн используют **`sources.news.Source`** → **`sources/news_merge.py`**.
+
+| Источник | Условие | Поле в `NewsArticle` |
+|----------|---------|----------------------|
+| Yahoo (yfinance) | всегда | `provider_id=yfinance` |
+| NewsAPI | задан `NEWSAPI_KEY` | `newsapi` |
+| Marketaux | задан `MARKETAUX_API_KEY` | `marketaux` (+ опционально `raw_sentiment`) |
+| Alpha Vantage | задан `ALPHAVANTAGE_KEY` | `alphavantage` (+ `raw_sentiment`) |
+| RSS | задан `NYSE_NEWS_RSS_URLS` | `rss` (только если в запросе **один** тикер) |
+
+Слияние и дедуп: **`pipeline/ingest.merge_news_articles`**. Лишние ключи не обязательны: без них остаётся только Yahoo.
+
 ## Structured LLM и экономия токенов (расширения относительно pystockinvest)
 
 Архитектура DTO/промптов совпадает с **pystockinvest** (`agent/news`, `agent/market`, `agent/calendar`). В NYSE дополнительно:
