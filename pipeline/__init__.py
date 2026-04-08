@@ -88,7 +88,6 @@ __all__ = [
     "llm_response_to_domain_signals",
     "LlmArticlePlan",
     "plan_llm_article_batch",
-    "chat_completion_text",
     "cache_key_llm",
     "get_or_set_llm_text",
     "default_llm_file_cache",
@@ -105,10 +104,6 @@ def __getattr__(name: str):
     LLM и схемы уровня 5 подгружаются лениво, чтобы ``python -m pipeline.<module>`` не получал
     предупреждение runpy о модуле, уже попавшем в sys.modules при ``import pipeline``.
     """
-    if name == "chat_completion_text":
-        from .llm_client import chat_completion_text
-
-        return chat_completion_text
     if name in ("cache_key_llm", "default_llm_file_cache", "get_or_set_llm_text"):
         from . import llm_cache as _lc
 

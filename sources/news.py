@@ -6,25 +6,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from domain import NewsArticle, Ticker
 
 from .news_merge import fetch_merged_news
-
-
-@dataclass
-class ParsedNewsItem:
-    """Совместимость со старым API (почти не используется)."""
-
-    id: str
-    title: str
-    summary: Optional[str]
-    timestamp: datetime
-    link: Optional[str]
-    publisher: Optional[str]
 
 
 class Source:

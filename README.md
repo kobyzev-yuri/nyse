@@ -224,7 +224,7 @@ nyse/
 │   ├── calendar_context.py       # CalendarEvent HIGH → GateContext
 │   ├── gates.py                  # Ур. 4: decide_llm_mode
 │   ├── news_cache.py             # FileCache для статей и draft_impulse
-│   ├── llm_client.py             # OpenAI-compatible HTTP client
+│   ├── llm_factory.py            # LangChain BaseChatModel (OpenAI-совместимый endpoint)
 │   ├── llm_cache.py              # кэш LLM-ответов (FileCache)
 │   ├── llm_digest.py             # lite-дайджест промпт
 │   ├── news_signal_schema.py     # Pydantic-схема JSON-ответа LLM
@@ -248,6 +248,7 @@ nyse/
 │   └── calibrate_gate.py    # офлайн-калибровка T1/T2/N
 │
 ├── tests/
+│   ├── support/             # хелперы только для тестов (напр. OpenAI HTTP completion mock)
 │   ├── unit/                # 140 тестов, без сети
 │   └── integration/         # smoke (pytest.skip без сети / ключей)
 │
@@ -257,6 +258,7 @@ nyse/
     ├── dataflow.md                           # Mermaid-схемы
     ├── architecture.md                       # структура sources/
     ├── news_sources_testing_and_pipeline_roadmap.md
+    ├── cleanup_inventory.md                  # перенос legacy в tests/support, план чистки
     ├── configuration.md
     ├── testing_telegram_plan.md
     ├── news_cache_and_impulse_proposals.md

@@ -62,7 +62,7 @@ def build_signal_messages(
     now: datetime | None = None,
 ) -> list[dict[str, str]]:
     """
-    Список из двух сообщений (system + user) для ``chat_completion_text``.
+    Список из двух сообщений (system + user) для вызова LLM (LangChain ``BaseChatModel``).
 
     ``articles`` — уже отобранный батч (индексы 1..n);
     ``ticker``   — строка тикера, например ``"NVDA"``.

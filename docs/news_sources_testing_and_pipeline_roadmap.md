@@ -44,7 +44,7 @@
 | Дешёвый сентимент (уровень 2) | `tests/unit/test_sentiment.py` (`resolve_cheap_sentiment`, `enrich_cheap_sentiment`, кэш; без загрузки FinBERT) |
 | Календарь → гейт (этап C) | `tests/unit/test_calendar_context.py` (`calendar_high_soon`, `build_gate_context`) |
 | Кэш новостей / draft (этап E) | `tests/unit/test_news_cache.py`; базовый TTL — `tests/unit/test_cache.py` |
-| LLM-клиент и кэш completion (этап F) | `tests/unit/test_llm_client.py`, `test_llm_cache.py`, `test_llm_digest.py` (mock HTTP / без сети) |
+| LLM-клиент и кэш completion (этап F) | `tests/unit/test_llm_client.py` (HTTP-хелпер в `tests/support/`), `test_llm_cache.py`, `test_llm_digest.py` (mock / без сети) |
 | DTO уровня 5 (`NewsSignal`, `AggregatedNewsSignal`) | `tests/unit/test_domain_news_signal.py` (значения enum как в pystockinvest `agent/models.py`) |
 | JSON → Pydantic ответ LLM (шаг 2) | `tests/unit/test_news_signal_schema.py` (`parse_news_signal_llm_json`, fence) |
 | План батча по `LLMMode` (шаг 3) | `tests/unit/test_llm_batch_plan.py` (`plan_llm_article_batch`) |
@@ -72,7 +72,7 @@
 
 **Кэш (этап E):** `pipeline/news_cache.py` — JSON-сериализация статей, `get_or_set_articles` / `get_or_set_draft_impulse`, `default_news_file_cache()`; корень по умолчанию ``<корень nyse>/.cache/nyse``.
 
-**LLM (этап F):** `pipeline/llm_client.py`, `llm_cache.py`, `llm_digest.py` — completion по `get_openai_settings()`, кэш ответа по `cache_key_llm(...)`; TTL `NYSE_LLM_CACHE_TTL_SEC` (см. `config_loader.llm_cache_ttl_sec`).
+**LLM (этап F):** `pipeline/llm_factory.py`, `llm_cache.py`, `llm_digest.py` — вызов через LangChain `get_chat_model()` / `get_openai_settings()`, кэш ответа по `cache_key_llm(...)`; TTL `NYSE_LLM_CACHE_TTL_SEC` (см. `config_loader.llm_cache_ttl_sec`). Низкоуровневый HTTP completion для мок-тестов — `tests/support/openai_chat_completion.py`.
 
 **К уровню 5 (шаги 2–4):** `pipeline/news_signal_schema.py` — Pydantic `NewsSignalLLMResponse`, `parse_news_signal_llm_json`; `pipeline/llm_batch_plan.py` — `plan_llm_article_batch` / `LlmArticlePlan`; зависимость **`pydantic>=2`** в `pyproject.toml`.
 
@@ -103,7 +103,7 @@
 | **C** | Календарь в гейте | **`pipeline.calendar_high_soon`**, **`build_gate_context`** (`pipeline/calendar_context.py`): только `HIGH`, окно `[now−after, now+before]` мин (env `NYSE_CALENDAR_HIGH_*`) | `tests/unit/test_calendar_context.py`; живые события — по-прежнему `sources.ecalendar` → список `CalendarEvent` |
 | **D** | Уровень 3 (уточнение) | **`DraftImpulse`**: счётчики статей и суммы весов по каналам; ``max_abs_regime`` / ``max_abs_policy``; среднее INCREMENTAL отделено от REGIME/POLICY (`pipeline/types.py`, `draft_impulse`) | `tests/unit/test_draft.py` (в т.ч. «только REGIME» не даёт ненулевой incremental) |
 | **E** | Кэш по доку | **`pipeline/news_cache.py`**: сериализация ``NewsArticle``, ``get_or_set_articles`` / ``get_or_set_draft_impulse``, ключи ``cache_key_*``; env ``NYSE_CACHE_ROOT``, ``NYSE_NEWS_RAW_TTL_SEC``, ``NYSE_NEWS_AGGREGATE_TTL_SEC`` | `tests/unit/test_news_cache.py` + базовый `test_cache.py` |
-| **F** | HTTP LLM + кэш completion + lite-дайджест | **`pipeline/llm_client.py`**, **`llm_cache.py`**, **`llm_digest.py`** (см. §1.3); инфраструктура вызова и кэша до полного news-runner | `tests/unit/test_llm_*.py` |
+| **F** | LangChain LLM + кэш completion + lite-дайджест | **`pipeline/llm_factory.py`**, **`llm_cache.py`**, **`llm_digest.py`** (см. §1.3); инфраструктура вызова и кэша до полного news-runner | `tests/unit/test_llm_*.py` |
 | **G** | Калибровка порогов | Процедура и журнал T1/T2/N; подстройка по живым выборкам — **непрерывный** процесс | **`docs/calibration.md`**, таблица в **`news_pipeline_hierarchy.md`** (§ «Калибровка (G)») |
 
 **Порядок работ (исторический):** A → B → C параллельно с уточнением D; E по мере нагрузки на API; F после стабилизации 1–4 уровней; **G идёт параллельно с эксплуатацией**, не «одним коммитом».
@@ -115,7 +115,7 @@
 | Уровень / тема | Содержание | Примечание |
 |----------------|------------|------------|
 | **G (ongoing)** | Калибровка `ThresholdConfig`, журнал в `calibration.md` | 4 прогона; профили GAME5M/CONTEXT; баг fix в порядке гейта; `price_pattern_boost` |
-| **Уровень 5** | Полный **structured LLM** (как pystockinvest): selection при необходимости, `NewsSignal` / `AggregatedNewsSignal`, промпты и контракт совпадают | Сверх F: не только `chat_completion_text`, а согласованные DTO и агрегация |
+| **Уровень 5** | Полный **structured LLM** (как pystockinvest): selection при необходимости, `NewsSignal` / `AggregatedNewsSignal`, промпты и контракт совпадают | Сверх F: не только «сырой» completion, а согласованные DTO и агрегация |
 | **Уровень 6** | Слияние **техника + новости + календарь** в `Trade` | ✅ Реализовано: `pipeline/trade_builder.py` = логика `pystockinvest/agent/trade.py` |
 | **Интеграция / CI** | Опционально: один **smoke**-integration тест с реальным HTTP completion (ключ в env, маркер `integration`) | Сейчас `test_openai_config.py` проверяет только загрузку настроек, не вызов API |
 

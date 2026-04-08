@@ -196,6 +196,7 @@ def _worker_trade(ticker_str: str) -> Tuple[str, str]:
     from pipeline.technical import LlmTechnicalAgent, LseHeuristicAgent
     from pipeline.sentiment import enrich_cheap_sentiment
     from pipeline.draft import scored_from_news_articles
+    from pipeline.regime_cluster import apply_regime_cluster_for_draft
     from pipeline import (
         build_gate_context,
         draft_impulse, single_scalar_draft_bias,
@@ -234,9 +235,10 @@ def _worker_trade(ticker_str: str) -> Tuple[str, str]:
     articles = [a for a in articles if a.ticker == ticker]
     articles = enrich_cheap_sentiment(articles)
 
-    # --- L3: черновой импульс по каналам (INCREMENTAL / REGIME / POLICY) ---
-    scored = scored_from_news_articles(articles)
-    di     = draft_impulse(scored)
+    # --- L3: черновой импульс (кластеризация REG по теме — только для draft/gate; LLM ниже — полный список) ---
+    articles_for_draft, _ = apply_regime_cluster_for_draft(articles, now=now, openai_settings=oai)
+    scored = scored_from_news_articles(articles_for_draft)
+    di     = draft_impulse(scored, now=now)
     bias   = single_scalar_draft_bias(di)
 
     # --- L4: гейт — решаем нужен ли LLM новостей (календарь влияет на FULL) ---

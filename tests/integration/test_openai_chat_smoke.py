@@ -8,7 +8,7 @@ import requests
 
 @pytest.mark.integration
 def test_chat_completion_smoke(require_openai_settings):
-    from pipeline.llm_client import chat_completion_text
+    from tests.support import chat_completion_text
 
     try:
         out = chat_completion_text(

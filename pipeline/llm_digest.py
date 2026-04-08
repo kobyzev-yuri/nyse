@@ -58,7 +58,7 @@ def run_lite_digest_cached(
     ttl_sec: Optional[int] = None,
 ) -> str:
     """
-    Дайджест через ``chat_completion_text`` с кэшем по ``cache_key_llm``.
+    Дайджест через ``get_chat_model()`` (LangChain) с кэшем по ``cache_key_llm``.
 
     Требует ``OPENAI_API_KEY`` (иначе ``RuntimeError``).
     """

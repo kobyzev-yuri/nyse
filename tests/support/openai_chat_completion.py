@@ -1,26 +1,15 @@
 """
-[LEGACY] Низкоуровневый HTTP-клиент к OpenAI /chat/completions.
+Низкоуровневый HTTP-клиент к OpenAI-совместимому ``/chat/completions``.
 
-Используется только в тестах, которые мокают ``requests.post``.
-Новый код должен использовать ``pipeline.llm_factory.get_chat_model()``
-и LangChain BaseChatModel, как в pystockinvest.
+Используется в юнит-тестах с моком ``requests.post``. Продакшен-пайплайн и бот
+работают через ``pipeline.llm_factory.get_chat_model()`` (LangChain).
 """
 
 from __future__ import annotations
 
-import runpy
-import sys
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 import requests
-
-if __name__ == "__main__" and __package__ is None:
-    _root = Path(__file__).resolve().parent.parent
-    if str(_root) not in sys.path:
-        sys.path.insert(0, str(_root))
-    runpy.run_module("pipeline.llm_client", run_name="__main__")
-    raise SystemExit(0)
 
 
 def chat_completion_text(
@@ -65,7 +54,3 @@ def chat_completion_text(
     if content is None:
         raise RuntimeError("chat completion: missing content")
     return content if isinstance(content, str) else str(content)
-
-
-if __name__ == "__main__":
-    print("chat_completion_text — импортируйте из pipeline или вызывайте с ключом в окружении.")

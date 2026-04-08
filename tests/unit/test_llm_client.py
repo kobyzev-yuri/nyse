@@ -8,7 +8,7 @@ import pytest
 
 import config_loader
 from config_loader import OpenAISettings
-from pipeline.llm_client import chat_completion_text
+from tests.support import chat_completion_text
 
 
 def test_chat_completion_text_parses_content():

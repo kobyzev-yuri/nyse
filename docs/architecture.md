@@ -33,7 +33,7 @@ nyse/
 │   ├── calendar_context.py  # этап C: calendar_high_soon
 │   ├── gates.py          # ур. 4: decide_llm_mode
 │   ├── news_cache.py     # этап E: FileCache для статей/draft
-│   ├── llm_client.py     # этап F: HTTP LLM client
+│   ├── llm_factory.py    # этап F: LangChain chat model (OpenAI-совместимый API)
 │   ├── llm_cache.py      # этап F: кэш LLM-ответов
 │   ├── llm_digest.py     # этап F: lite-дайджест
 │   ├── news_signal_schema.py    # ур. 5: Pydantic-схема LLM-ответа

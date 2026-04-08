@@ -830,6 +830,12 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         f'<p class="meta"><b>draft_bias = {t.draft_bias:+.4f}</b> '
         f"(single_scalar_draft_bias: INC bias, boosted by |REG|+|POL| если стресс высокий)</p>"
     )
+    rcm = getattr(t, "regime_cluster_meta", None)
+    if rcm is not None and getattr(rcm, "enabled", False):
+        b5 += (
+            f'<p class="meta" style="color:#58a6ff">Кластеры REG (только draft/gate): '
+            f"{_h(rcm.note)}</p>"
+        )
 
     # -----------------------------------------------------------------------
     # Блок 6: Gate Decision

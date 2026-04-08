@@ -1,5 +1,5 @@
 """
-Общая конфигурация pytest: корень репозитория в sys.path для `import pipeline` и `import domain`.
+Общая конфигурация pytest: корень репозитория в sys.path для `import pipeline`, `import domain` и `import tests.support`.
 Все модули тестов в `tests/unit/` используют эти фикстуры.
 
 Конфигурация секретов (LLM, ProxyAPI, Telegram): в обычных юнит-тестах не используется.

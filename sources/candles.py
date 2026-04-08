@@ -1,5 +1,4 @@
 import logging
-import warnings
 from typing import Hashable, List, Any, Dict
 from datetime import datetime, timedelta, timezone
 
@@ -39,16 +38,6 @@ class Source:
             start=now - timedelta(days=days),
             end=now,
         )
-
-    def get_dayly_candles(
-        self, tickers: List[Ticker], days: int
-    ) -> Dict[Ticker, List[Candle]]:
-        warnings.warn(
-            "get_dayly_candles is deprecated; use get_daily_candles",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.get_daily_candles(tickers, days)
 
     def get_minutely_candles(
         self, tickers: List[Ticker], days: int

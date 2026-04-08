@@ -32,6 +32,7 @@ from pipeline.calendar_llm_agent import CalendarLlmAgent
 from pipeline.trade_builder import neutral_calendar_signal
 from pipeline.news_signal_runner import run_news_signal_pipeline
 from pipeline.sentiment import enrich_cheap_sentiment
+from pipeline.regime_cluster import RegimeClusterMeta, apply_regime_cluster_for_draft
 from pipeline.trade_builder import FusedBias, TradeBuilder
 from pipeline.types import (
     DraftImpulse,
@@ -90,9 +91,8 @@ class PipelineDebugTrace:
     fused: FusedBias
     trade: Trade
 
-    # --- Макро-календарь (сырьё для гейта; для HTML-таблицы) ---
-    calendar_events: List = field(default_factory=list)
-    calendar_load_error: Optional[str] = None
+    # --- REG: кластеризация тем для draft/gate (опционально) ---
+    regime_cluster_meta: Optional[RegimeClusterMeta] = None
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ def run_debug_pipeline(
     metrics_list: list,          # List[TickerMetrics]
     *,
     profile: ThresholdConfig = PROFILE_GAME5M,
-    lookback_hours: Optional[int] = None,
+    lookback_hours: int = 72,
     max_articles: int = 12,
     settings=None,
 ) -> PipelineDebugTrace:
@@ -157,11 +157,6 @@ def run_debug_pipeline(
 
     now = datetime.now(timezone.utc)
     ticker_val = ticker.value
-    lb = (
-        lookback_hours
-        if lookback_hours is not None
-        else _cfg_mod.news_lookback_hours_signal()
-    )
 
     td: TickerData = ticker_data_map[ticker]
     metrics_map = {m.ticker: m for m in metrics_list}
@@ -179,7 +174,7 @@ def run_debug_pipeline(
     # --- L3a: статьи + cheap_sentiment ---
     raw_articles = NewsSource(
         max_per_ticker=max_articles,
-        lookback_hours=lb,
+        lookback_hours=lookback_hours,
     ).get_articles([ticker])
     articles = [a for a in raw_articles if a.ticker == ticker]
     articles = list(enrich_cheap_sentiment(articles))
@@ -190,23 +185,24 @@ def run_debug_pipeline(
         ch, _ = classify_channel(a.title, a.summary)
         article_channels.append(ch.value)
 
-    # --- L3c: scored + DraftImpulse ---
-    scored = list(scored_from_news_articles(articles))
+    # --- L3c: scored + DraftImpulse (REG кластеризуются по теме только здесь; LLM — полный список articles) ---
+    s_embed = settings if settings is not None else config_loader.get_openai_settings()
+    articles_for_draft, rmeta = apply_regime_cluster_for_draft(
+        articles, now=now, openai_settings=s_embed
+    )
+    scored = list(scored_from_news_articles(articles_for_draft))
     di = draft_impulse(scored, now=now)
     bias = single_scalar_draft_bias(di)
 
     # --- L4: Gate (календарь HIGH в окне → FULL) ---
     cal_events: list = []
-    cal_err: Optional[str] = None
     try:
         from domain import Currency
         from sources.ecalendar import Source as CalendarSource
 
-        cal_events = list(
-            CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
-        )
-    except Exception as exc:
-        cal_err = f"{type(exc).__name__}: {exc}"[:400]
+        cal_events = CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
+    except Exception:
+        pass
 
     gate_ctx = build_gate_context(
         draft_bias=bias,
@@ -275,6 +271,5 @@ def run_debug_pipeline(
         news_signal=news_signal,
         fused=fused,
         trade=trade,
-        calendar_events=cal_events,
-        calendar_load_error=cal_err,
+        regime_cluster_meta=rmeta,
     )
