@@ -8,12 +8,23 @@ from typing import Optional
 from .types import NewsImpactChannel
 
 # Минимальные словари; расширяются по результатам тестов и калибровки.
+# REGIME — не только «война», но и перемирие/геозона: иначе заголовки вида
+# «Persian Gulf Ceasefire…» остаются в INCREMENTAL и regime_stress=0.
 _REGIME_PATTERNS = [
     re.compile(
         r"\b(?:war|sanction|sanctions|embargo|invasion|military|nato|missile)\b",
         re.I,
     ),
-    re.compile(r"\b(?:геополит|санкци|война|конфликт)\b", re.I),
+    re.compile(
+        r"\b(?:ceasefire|truce|armistice|geopolitical|terror|hostilities|"
+        r"iran|israeli?|ukraine|gaza|taiwan|north korea)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:persian gulf|middle east|strait of hormuz|red sea)\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:геополит|санкци|война|конфликт|перемири)\b", re.I),
 ]
 _POLICY_PATTERNS = [
     re.compile(

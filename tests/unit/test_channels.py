@@ -12,6 +12,12 @@ from pipeline import NewsImpactChannel, classify_channel
     [
         ("Fed signals pause in rate hikes", None, NewsImpactChannel.POLICY_RATES),
         ("Oil jumps on new sanctions package", None, NewsImpactChannel.REGIME),
+        (
+            "Persian Gulf Ceasefire Looses Bulls on Wall Street Pre-Bell",
+            None,
+            NewsImpactChannel.REGIME,
+        ),
+        ("US and Iran agree to two-week ceasefire", None, NewsImpactChannel.REGIME),
         ("NVDA beats earnings estimates", None, NewsImpactChannel.INCREMENTAL),
     ],
 )
