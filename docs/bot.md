@@ -5,6 +5,63 @@ Telegram-бот для анализа тикеров из списка `GAME_5M`
 
 ---
 
+## Поток расчётов: от данных до решения о входе
+
+Ниже — одна цепочка «своими словами»: что считается раньше, что позже, и какие числа реально попадают в сделку. Развёрнутая версия с **реальным примером MU** — в [`docs/СвоимиСловами.md`](СвоимиСловами.md); тот же прогон как статический HTML (все блоки ①–⑦) — [`docs/examples/signal_MU_2026-04-08_17-52.html`](examples/signal_MU_2026-04-08_17-52.html). Если нужно сместить поведение бота, почти всегда ищите именованные константы или профиль в указанных файлах (а не «магические» литералы в середине функций).
+
+### L0–L1: рыночный контекст
+
+Подтягиваются свечи (yfinance) и по возможности метрики (Finviz) для целевого тикера и контекста (например SMH, QQQ). Без этого пайплайн дальше не поедет. Это сырьё для цен, ATR, RSI и т.д.
+
+### L2: технический сигнал
+
+Агент (по умолчанию эвристика `LseHeuristicAgent`, опционально structured LLM при `NYSE_LLM_TECHNICAL`) выдаёт **`TechnicalSignal`**: в частности **`bias`** ∈ [-1,1], **`confidence`**, **`tradeability_score`** (насколько «тянется» заявка на сделку) и сводные строки в `summary`.  
+**`tradeability_score` нигде не смешивается с новостями** — он участвует только в финальном гейте L6.
+
+### L3: новости «по скорам», без агрегатора LLM
+
+Загружаются заголовки; на каждую статью вешается **`cheap_sentiment`** (FinBERT / API / price_pattern) и канал INC / REG / POL. Из этого строится **`DraftImpulse`** (взвешенные средние по каналам с затуханием по времени) и один скаляр **`draft_bias`**.  
+**Важно:** `draft_bias` нужен **гейту L4** (решить, вызывать ли дорогой LLM по новостям и в каком режиме). Он **не** умножается на 30% в формуле Fusion — в Fusion идёт другой объект (см. L5).
+
+### L4: гейт
+
+По `draft_bias`, признаку режима/стресса из черновика, числу статей, календарю HIGH в окне и порогам профиля **`PROFILE_GAME5M`** (`pipeline/types.py`, `ThresholdConfig`) выбирается **`LLMMode`**: SKIP / LITE / FULL.  
+В **`run_news_signal_pipeline`** structured LLM по новостям запускается только в режиме **FULL**; при **SKIP** и **LITE** возвращается нейтральный **`AggregatedNewsSignal`** (bias 0) — тогда вклад News в Fusion нулевой, даже если `draft_bias` был выразительным.
+
+### L5: новостной bias для Fusion
+
+Если сработал **FULL**, модель по батчу статей отдаёт structured-поля (sentiment, relevance, impact, horizon, confidence). **`aggregate_news_signals`** (`pipeline/news_signal_aggregator.py`) считает взвешенное среднее sentiment с весами по relevance/impact/horizon/confidence — это и есть **`AggregatedNewsSignal.bias`** и **`confidence`**, которые попадают в сделку. Текстовые строки summary в отчёте — человекочитаемое повторение этих двух чисел.
+
+### L6: сплав и решение о входе
+
+**`TradeBuilder`** (`pipeline/trade_builder.py`) считает  
+**`final_bias` = `W_TECH`×tech.bias + `W_NEWS`×news.bias + `W_CAL`×calendar.broad_equity_bias**  
+(константы **`W_TECH` / `W_NEWS` / `W_CAL`** — как в `pystockinvest/agent/trade.py`). Календарь без LLM часто нейтрален (bias 0), но таблица макро-событий всё равно влияет на гейт L4.
+
+Отдельно считается **`_final_confidence`** (смесь conf техники, новостей, календаря и штраф за календарный риск) — она попадает в позицию как уверенность сделки.
+
+**Решение LONG / SHORT / NO TRADE** — только по правилам **`_build_position`**:  
+1) **`tradeability_score` ≥ `MIN_TRADEABILITY_FOR_POSITION`** (по умолчанию 0.40);  
+2) **`final_bias` > `MIN_ABS_FINAL_BIAS_FOR_POSITION`** для LONG или **< −`MIN_ABS_FINAL_BIAS_FOR_POSITION`** для SHORT (по умолчанию ±0.20).  
+Иначе позиции нет (**NO TRADE**).
+
+Тип входа LIMIT/MARKET и уровни TP/SL считаются тем же билдером (ATR, волатильность, новости, календарный риск) — см. `trade_builder.py`.
+
+### Где править числа
+
+| Назначение | Где смотреть |
+|------------|----------------|
+| Веса Fusion 55/30/15, пороги входа L6, LIMIT/MARKET, TP/SL | `pipeline/trade_builder.py` (`W_*`, `MIN_*`, логика `_entry_type` / `_risk_levels`) |
+| Пороги гейта L4 (t1, t2, max статей FULL, regime_min) | `pipeline/types.py` — `PROFILE_GAME5M`, `ThresholdConfig` |
+| Веса строк в L5-агрегаторе новостей | `pipeline/news_signal_aggregator.py` |
+| Затухание статей по времени в L3 | `pipeline/draft.py` (`draft_impulse`, half-life) |
+| Окно HIGH календаря для гейта | `config.env` — `NYSE_CALENDAR_HIGH_*`, см. `config_loader` |
+| Включение LLM-техники / календаря | `config.env` — `NYSE_LLM_TECHNICAL`, `NYSE_LLM_CALENDAR` |
+
+Синхронизация с проектом **pystockinvest**: веса и пороги входа в `trade_builder.py` задуманы как зеркало `pystockinvest/agent/trade.py`; менять их имеет смысл согласованно в обоих местах.
+
+---
+
 ## Запуск
 
 ```bash
@@ -22,11 +79,10 @@ conda run -n py11 python scripts/run_bot.py
 
 ### `/trade TICKER`
 
-**Агрегированное решение для входа:** полный pipeline L0–L6 для одного тикера (то, что раньше выдавалось командой `/signal`).
+**Краткий итог для входа:** тот же pipeline L0–L6, что и раньше, но ориентир на «торговую выжимку», а не на полный debug.
 
 **Вывод:**
-- Текст в чате: направление (LONG/SHORT/NO TRADE), Entry/TP/SL, Fused bias
-- HTML-файл `trade_TICKER_YYYY-MM-DD_HH-MM.html`: Trade, Fusion, макро-календарь (как у гейта), блоки новостей INC/POL и REG, технический и LLM-сводки
+- Только **текст в чате**: Entry/TP/SL (или NO TRADE), компактный L6, импульсы L3–L4, одна строка Fusion, 1–2 строки техники и новостей. **HTML-файл не отправляется** (детали и таблицы — в `/news` и `/signal`).
 
 **Pipeline:**
 ```
@@ -34,9 +90,25 @@ L0-L1  yfinance + Finviz → TickerData, TickerMetrics
 L2     LseHeuristicAgent / LlmTechnicalAgent → TechnicalSignal
 L3     Yahoo News → FinBERT → DraftImpulse
 L4     Gate → LLMMode (SKIP/LITE/FULL); календарь HIGH влияет на FULL
-L5     LLM (если FULL/LITE) → AggregatedNewsSignal
+L5     Structured LLM при FULL → AggregatedNewsSignal (при SKIP/LITE вклад News в Fusion = 0)
 L6     TradeBuilder → Trade (Entry/TP/SL)
 ```
+
+### Как принимается окончательное решение (L6)
+
+Сквозная логика L0–L6 своими словами — в разделе **«Поток расчётов: от данных до решения о входе»** выше в этом файле; здесь — только финальный гейт.
+
+Сначала считается **final_bias** — то же число, что строка **Fused** в отчёте:  
+`0.55·tech.bias + 0.30·news.bias + 0.15·calendar.broad_equity_bias`. Если новостной агрегат (L5) не строился (gate SKIP), вклад новостей в формуле нулевой.
+
+**TradeBuilder** после этого решает, будет ли позиция LONG, SHORT или **NO TRADE**:
+
+1. **Качество сетапа:** `tradeability_score` с уровня L2 должен быть **не ниже** `MIN_TRADEABILITY_FOR_POSITION` (по умолчанию **0.40**). Иначе вход запрещён: сетап считается слишком слабым, независимо от знака fused.
+2. **Направление:** если порог A выполнен, нужно, чтобы **fused** (тот же final_bias) вышел из «мёртвой зоны» около нуля: для **LONG** требуется `fused > MIN_ABS_FINAL_BIAS_FOR_POSITION` (**+0.20**), для **SHORT** — `fused < −0.20`. Если fused между **−0.20** и **+0.20**, сторона не выбирается → **NO TRADE**.
+
+Имена порогов и их значения заданы константами в `pipeline/trade_builder.py` (`MIN_TRADEABILITY_FOR_POSITION`, `MIN_ABS_FINAL_BIAS_FOR_POSITION`). В сообщении `/trade` рядом с LONG / SHORT / NO TRADE приводятся фактические `tradeability` и `fused` (компактный L6).
+
+**NO TRADE** в боте означает: «по правилам L6 вход не предлагается». Это не обязательно то же самое, что иной режим вроде «HOLD» в другом агенте или проекте — там могут быть свои определения.
 
 ---
 
@@ -62,13 +134,13 @@ L6     TradeBuilder → Trade (Entry/TP/SL)
 
 ### `/news TICKER`
 
-**Новости, геополитика (каналы INC/REG/POL) и макро-календарь** — без торгового пайплайна (без L2–L6, без Entry/TP/SL).
+**Новости, геополитика (каналы INC/REG/POL), макро-календарь и тот же L5 (агрегат LLM), что в полном `/signal`** — без техники и без TradeBuilder (без Entry/TP/SL).
 
-Окно заголовков задаётся `NYSE_NEWS_LOOKBACK_NEWS_HOURS` (по умолчанию 48 ч).
+Окно заголовков задаётся `NYSE_NEWS_LOOKBACK_NEWS_HOURS` (по умолчанию 48 ч). Гейт L4 и `run_news_signal_pipeline` совпадают по смыслу с `/trade`, но окно статей здесь короче (48 ч / cap 10).
 
 **Вывод:**
 - Текст: список `▲/■/▼ канал score заголовок`
-- HTML-файл `news_TICKER_...`: календарь (ecalendar), затем блоки обычных новостей и REG; в таблицах может отображаться `provider_id`
+- HTML `news_TICKER_...`: календарь, INC/POL, REG, затем секция **«Агрегат новостей (LLM)»** (bias, confidence, summary, таблица per-article при `FULL`) или пояснение при `SKIP`/`LITE`/отсутствии ключа OpenAI
 
 ---
 
@@ -94,15 +166,15 @@ scripts/run_bot.py          ← точка входа, long-polling
 bot/nyse_bot.py             ← хендлеры команд + воркеры
   ├── _load_market_data()   ← общий хелпер: yfinance + Finviz
   ├── _worker_scan()        → (short_text, html)
-  ├── _worker_trade()       → (short_text, html)   ← /trade, агрегат для входа
-  ├── _worker_signal()      → (short_text, html)   ← /signal, полный L0–L6 HTML
-  ├── _worker_news()        → (short_text, html)   ← /news, без trade pipeline
+  ├── _worker_trade()       → (short_text, пустой html)  ← /trade, только текст в чате
+  ├── _worker_signal()      → (short_text, html)   ← /signal и /news_signal, полный debug HTML
+  ├── _worker_news()        → (short_text, html)   ← /news, календарь + новости + REG + L5 LLM в HTML
   └── _worker_status()      → str
 
 pipeline/
   ├── debug_runner.py       ← PipelineDebugTrace + run_debug_pipeline()
   ├── html_report.py        ← build_trade_html(), build_news_html(), build_debug_report_html()
-  ├── trade_builder.py      ← TradeBuilder, FusedBias, neutral_calendar_signal
+  ├── trade_builder.py      ← TradeBuilder, FusedBias, пороги L6 (MIN_*), neutral_calendar_signal
   ├── telegram_format.py    ← format_trade(), format_news_list()
   ├── gates.py              ← decide_llm_mode()
   ├── draft.py              ← draft_impulse(), MultiTickerGateSession
@@ -117,7 +189,9 @@ pipeline/
 в thread executor, чтобы не блокировать event loop Telegram:
 
 ```python
-result = await loop.run_in_executor(None, partial(_worker_trade, ticker_str))
+result = await loop.run_in_executor(None, partial(_worker_trade, ticker_str))   # /trade
+# или
+result = await loop.run_in_executor(None, partial(_worker_signal, ticker_str))  # /signal
 ```
 
 Каждый воркер возвращает `(short_text: str, html_content: str)`:
@@ -166,7 +240,7 @@ TELEGRAM_PROXY=socks5h://127.0.0.1:1080
 В коде расставлены комментарии `# KERIM_REPLACE` в местах, где предполагается
 замена baseline-агента на ML-агент Керима:
 
-### `bot/nyse_bot.py` — `_worker_scan` и `_worker_trade`
+### `bot/nyse_bot.py` — `_worker_scan`, `_worker_trade` и `_worker_signal`
 
 ```python
 # KERIM_REPLACE: заменить LseHeuristicAgent на KerimsAgent:
@@ -191,7 +265,7 @@ trace = run_debug_pipeline(
 
 ### `pipeline/trade_builder.py` — слияние (1:1 с pystockinvest)
 
-Константы **`W_TECH` / `W_NEWS` / `W_CAL`** (0.55 / 0.30 / 0.15), формула **`_final_confidence`**, вход **LIMIT/MARKET**, **TP/SL** через ATR и `volatility_regime` — как в **`pystockinvest/agent/trade.py`**.  
+Константы **`W_TECH` / `W_NEWS` / `W_CAL`** (0.55 / 0.30 / 0.15), пороги **`MIN_TRADEABILITY_FOR_POSITION`** / **`MIN_ABS_FINAL_BIAS_FOR_POSITION`**, формула **`_final_confidence`**, вход **LIMIT/MARKET**, **TP/SL** через ATR и `volatility_regime` — как в **`pystockinvest/agent/trade.py`**.  
 `KERIM_REPLACE`: в будущем веса можно сделать обучаемыми в агенте Керима; до тех пор не менять без синхронизации с pystockinvest.
 
 ### `TechnicalAgentProtocol`
@@ -209,7 +283,7 @@ class TechnicalAgentProtocol(Protocol):
 ```
 
 `LseHeuristicAgent` и `KerimsAgent` оба соответствуют этому протоколу.
-Замена прозрачна для `TradeBuilder` и `_worker_trade`.
+Замена прозрачна для `TradeBuilder` и воркеров `_worker_trade` / `_worker_signal`.
 
 ---
 
