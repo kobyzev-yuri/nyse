@@ -46,12 +46,14 @@ class ThresholdConfig:
 PROFILE_GAME5M = ThresholdConfig(
     t1_abs_draft_bias=0.12,
     t2_regime_confidence=0.5,
-    max_articles_full_batch=8,
+    max_articles_full_batch=12,
     regime_stress_min=0.05,
 )
 """Профиль для интрадей GAME_5M тикеров (SNDK, NBIS, MU, LITE, CIEN, ASML).
-Пониженный T1 и N, потому что у малых тикеров 3–9 статей/день — каждая весит больше.
-Откалибровано 2026-04-06.
+Пониженный T1; N поднят с 8 → 12 (2026-04-08): после слияния Yahoo+др. источников
+до ``max_per_ticker`` статей в окне ветка ``article_count > N`` не должна ложно
+тянуть LITE только из-за лимита 8 при фактическом потолке 12.
+Откалибровано 2026-04-06, уточнено 2026-04-08.
 """
 
 PROFILE_CONTEXT = ThresholdConfig(

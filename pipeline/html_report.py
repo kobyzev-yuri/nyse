@@ -323,13 +323,14 @@ def build_signal_html(
         headlines_html = (
             "<h2>Заголовки (48 ч)</h2>"
             "<table><thead><tr>"
-            "<th>#</th><th>Канал</th><th>Заголовок</th><th>Score</th>"
+            "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок</th><th>Score</th>"
             "</tr></thead><tbody>"
         )
         for i, a in enumerate(articles, 1):
             score = a.cheap_sentiment or 0.0
             ch, _ = classify_channel(a.title, getattr(a, "summary", None))
             ch_val = ch.value[:3].upper()
+            prov = getattr(a, "provider_id", None) or "—"
             score_class = "pos" if score > 0.05 else ("neg" if score < -0.05 else "neu")
             bar = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
             summary = getattr(a, "summary", "") or ""
@@ -340,6 +341,7 @@ def build_signal_html(
                 f"<tr>"
                 f"<td>{i}</td>"
                 f'<td><span class="tag">{_h(ch_val)}</span></td>'
+                f'<td><span class="tag">{_h(str(prov))}</span></td>'
                 f"<td>{title_full}</td>"
                 f'<td class="score {score_class}">{bar} {score:+.2f}</td>'
                 f"</tr>"
@@ -374,10 +376,12 @@ def build_news_html(ticker_val: str, articles: List) -> str:
         title_cell = _h(a.title)
         if summary:
             title_cell += f'<br><small style="color:#8b949e">{_h(summary[:150])}</small>'
+        prov = getattr(a, "provider_id", None) or "—"
         rows += (
             f"<tr>"
             f"<td>{i}</td>"
             f'<td><span class="tag">{_h(ch_val)}</span></td>'
+            f'<td><span class="tag">{_h(str(prov))}</span></td>'
             f"<td>{title_cell}</td>"
             f'<td class="score {score_class}">{bar} {score:+.2f}</td>'
             f"<td>{ts_str}</td>"
@@ -388,12 +392,13 @@ def build_news_html(ticker_val: str, articles: List) -> str:
         f"<h1>📰 {_h(ticker_val)} — новости</h1>"
         f'<p class="meta">{_now_str()} · {len(articles)} статей за 48 ч</p>'
         "<table><thead><tr>"
-        "<th>#</th><th>Канал</th><th>Заголовок</th><th>Score</th><th>Время</th>"
+        "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок</th><th>Score</th><th>Время</th>"
         "</tr></thead><tbody>"
         f"{rows}"
         "</tbody></table>"
         "<p style='color:#8b949e;font-size:0.8em;margin-top:16px'>"
         "INC = корп. новость · REG = макро/режим · POL = ставки/политика<br>"
+        "Источник: <code>provider_id</code> (yfinance, newsapi, marketaux, …)<br>"
         "Score: FinBERT/API/price_pattern_boost [-1..+1]"
         "</p>"
     )
@@ -689,9 +694,11 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         item_rows = ""
         for i, (item, a) in enumerate(zip(ns.items, t.llm_batch_articles), 1):
             sc = item.sentiment
+            prov = getattr(a, "provider_id", None) or "—"
             item_rows += (
                 f"<tr>"
                 f"<td>{i}</td>"
+                f'<td><span class="tag">{_h(str(prov))}</span></td>'
                 f"<td>{_h(a.title[:70])}</td>"
                 f'<td class="score {_fcls(sc)}">{_sent_bar(sc)} {sc:+.2f}</td>'
                 f"<td>{_h(item.impact_strength.value)}</td>"
@@ -704,7 +711,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         llm_table = (
             "<h3>Per-article LLM signals</h3>"
             "<table><thead><tr>"
-            "<th>#</th><th>Заголовок</th><th>Sentiment</th>"
+            "<th>#</th><th>Источник</th><th>Заголовок</th><th>Sentiment</th>"
             "<th>Impact</th><th>Relevance</th><th>Surprise</th>"
             "<th>Horizon</th><th>Conf</th>"
             "</tr></thead><tbody>"

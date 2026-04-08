@@ -200,12 +200,13 @@ def format_news_list(ticker_val: str, articles: list) -> str:
     for a in articles[:10]:
         score = a.cheap_sentiment or 0.0
         ch    = classify_channel(a.title, getattr(a, "summary", None))[0].value[:3].upper()
+        prov  = getattr(a, "provider_id", None) or "?"
         bar   = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
-        # Цветовой код канала
         ch_tag = f"<code>{ch}</code>"
+        pv_tag = f"<code>{_h(str(prov))}</code>"
         score_str = f"<i>{score:+.2f}</i>"
         title = _h(a.title[:80])
-        lines.append(f"{bar} {ch_tag} {title}")
+        lines.append(f"{bar} {ch_tag} {pv_tag} {title}")
         lines.append(f"    {score_str}")
 
     return "\n".join(lines)

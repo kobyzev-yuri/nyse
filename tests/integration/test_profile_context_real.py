@@ -3,7 +3,7 @@
 
 Ключевые отличия от PROFILE_GAME5M:
   - t1=0.20 (vs 0.12), full_at=0.40 (vs 0.24)
-  - max_articles_full_batch=15 (vs 8)
+  - max_articles_full_batch=15 (vs 12 в PROFILE_GAME5M)
   - Крупные тикеры получают 10-50 статей/день
 
 Что проверяет:
