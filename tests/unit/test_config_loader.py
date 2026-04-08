@@ -34,3 +34,18 @@ def test_llm_cache_ttl_sec_default(monkeypatch):
 def test_llm_cache_ttl_sec_override(monkeypatch):
     monkeypatch.setenv("NYSE_LLM_CACHE_TTL_SEC", "3600")
     assert config_loader.llm_cache_ttl_sec() == 3600
+
+
+def test_news_lookback_defaults(monkeypatch, tmp_path):
+    monkeypatch.delenv("NYSE_NEWS_LOOKBACK_SIGNAL_HOURS", raising=False)
+    monkeypatch.delenv("NYSE_NEWS_LOOKBACK_NEWS_HOURS", raising=False)
+    monkeypatch.setattr(config_loader, "config_env_path", lambda: tmp_path / "missing.env")
+    assert config_loader.news_lookback_hours_signal() == 72
+    assert config_loader.news_lookback_hours_news_cmd() == 48
+
+
+def test_news_lookback_env_override(monkeypatch):
+    monkeypatch.setenv("NYSE_NEWS_LOOKBACK_SIGNAL_HOURS", "96")
+    monkeypatch.setenv("NYSE_NEWS_LOOKBACK_NEWS_HOURS", "24")
+    assert config_loader.news_lookback_hours_signal() == 96
+    assert config_loader.news_lookback_hours_news_cmd() == 24

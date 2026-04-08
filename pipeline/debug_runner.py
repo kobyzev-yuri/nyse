@@ -135,7 +135,7 @@ def run_debug_pipeline(
     metrics_list: list,          # List[TickerMetrics]
     *,
     profile: ThresholdConfig = PROFILE_GAME5M,
-    lookback_hours: int = 72,
+    lookback_hours: Optional[int] = None,
     max_articles: int = 12,
     settings=None,
 ) -> PipelineDebugTrace:
@@ -157,6 +157,11 @@ def run_debug_pipeline(
 
     now = datetime.now(timezone.utc)
     ticker_val = ticker.value
+    lb = (
+        lookback_hours
+        if lookback_hours is not None
+        else _cfg_mod.news_lookback_hours_signal()
+    )
 
     td: TickerData = ticker_data_map[ticker]
     metrics_map = {m.ticker: m for m in metrics_list}
@@ -174,7 +179,7 @@ def run_debug_pipeline(
     # --- L3a: статьи + cheap_sentiment ---
     raw_articles = NewsSource(
         max_per_ticker=max_articles,
-        lookback_hours=lookback_hours,
+        lookback_hours=lb,
     ).get_articles([ticker])
     articles = [a for a in raw_articles if a.ticker == ticker]
     articles = list(enrich_cheap_sentiment(articles))

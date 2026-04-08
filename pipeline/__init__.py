@@ -10,7 +10,7 @@ from .news_cache import (
     get_or_set_draft_impulse,
     serialize_news_article,
 )
-from .channels import classify_channel
+from .channels import classify_channel, story_type_ru
 from .draft import MultiTickerGateSession, ScoredArticle, draft_impulse, scored_from_news_articles, single_scalar_draft_bias
 from .calendar_context import build_gate_context, calendar_high_soon
 from .gates import decide_llm_mode
@@ -53,6 +53,7 @@ __all__ = [
     "calendar_high_soon",
     "build_gate_context",
     "classify_channel",
+    "story_type_ru",
     "MultiTickerGateSession",
     "ScoredArticle",
     "scored_from_news_articles",

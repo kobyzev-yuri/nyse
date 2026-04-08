@@ -186,27 +186,36 @@ def format_signal_table(signals: list[tuple[str, TechnicalSignal]]) -> str:
     return "\n".join(lines)
 
 
-def format_news_list(ticker_val: str, articles: list) -> str:
+def format_news_list(
+    ticker_val: str,
+    articles: list,
+    *,
+    lookback_hours: int = 48,
+) -> str:
     """
     HTML-список статей с cheap_sentiment и каналом.
 
     Parameters
     ----------
     articles : список NewsArticle с заполненным cheap_sentiment и методом title/summary.
+    lookback_hours : подпись окна (как при загрузке новостей).
     """
-    from pipeline.channels import classify_channel
+    from pipeline.channels import classify_channel, story_type_ru
 
-    lines = [f"📰 <b>{_h(ticker_val)} — новости (48 ч)</b>\n"]
+    lines = [f"📰 <b>{_h(ticker_val)} — новости ({lookback_hours} ч)</b>\n"]
     for a in articles[:10]:
         score = a.cheap_sentiment or 0.0
-        ch    = classify_channel(a.title, getattr(a, "summary", None))[0].value[:3].upper()
+        ch, _ = classify_channel(a.title, getattr(a, "summary", None))
+        ch_s  = ch.value[:3].upper()
+        story = story_type_ru(ch)
         prov  = getattr(a, "provider_id", None) or "?"
         bar   = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
-        ch_tag = f"<code>{ch}</code>"
+        ch_tag = f"<code>{ch_s}</code>"
+        st_tag = f"<code>{_h(story)}</code>"
         pv_tag = f"<code>{_h(str(prov))}</code>"
         score_str = f"<i>{score:+.2f}</i>"
         title = _h(a.title[:80])
-        lines.append(f"{bar} {ch_tag} {pv_tag} {title}")
+        lines.append(f"{bar} {ch_tag} {st_tag} {pv_tag} {title}")
         lines.append(f"    {score_str}")
 
     return "\n".join(lines)

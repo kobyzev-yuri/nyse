@@ -18,6 +18,7 @@ python -m pytest tests/ -m integration # smoke-тесты (нужна сеть)
 
 # запуск Telegram-бота (long-polling)
 python scripts/run_bot.py
+# команды бота: /trade, /signal, /news — см. docs/bot.md
 
 # калибровка гейта на реальных данных
 python scripts/calibrate_gate.py --profile game5m --tickers SNDK NBIS CIEN --days 1

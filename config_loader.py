@@ -91,6 +91,37 @@ def get_config_value(key: str, default: Optional[str] = None) -> Optional[str]:
     return os.environ.get(key, default)
 
 
+def news_lookback_hours_signal() -> int:
+    """
+    Окно загрузки новостей (часы) для /signal, debug ``run_debug_pipeline`` и гейта.
+    По умолчанию 72 — шире, чем у /news, чтобы черновой bias и merge видели больше фона.
+    Переопределение: ``NYSE_NEWS_LOOKBACK_SIGNAL_HOURS``.
+    """
+    load_config_env()
+    raw = (os.environ.get("NYSE_NEWS_LOOKBACK_SIGNAL_HOURS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 72
+
+
+def news_lookback_hours_news_cmd() -> int:
+    """
+    Окно для команды /news (часы). По умолчанию 48 — короче снапшот для чата/HTML.
+    ``NYSE_NEWS_LOOKBACK_NEWS_HOURS``.
+    """
+    load_config_env()
+    raw = (os.environ.get("NYSE_NEWS_LOOKBACK_NEWS_HOURS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 48
+
+
 def get_newsapi_key() -> Optional[str]:
     """Ключ NewsAPI (newsapi.org); None, если не задан."""
     load_config_env()

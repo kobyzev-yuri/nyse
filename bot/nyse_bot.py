@@ -4,9 +4,10 @@ NyseBot — Telegram-бот для nyse news+technical pipeline.
 Команды:
     /start          — приветствие
     /help           — список команд
-    /signal TICKER  — полный сигнал: tech + news → Trade
+    /trade TICKER   — агрегат для входа: tech + news → Trade (HTML)
+    /signal TICKER  — полный отчёт L0–L6 (как бывший /news_signal)
     /scan           — снапшот всех GAME_5M тикеров (техника)
-    /news TICKER    — заголовки + FinBERT-сентимент
+    /news TICKER    — новости, геополитика, макро-календарь (без торгового пайплайна)
     /status         — статус рынка (NYSE open/closed)
 
 Запуск:
@@ -69,7 +70,7 @@ def _h(text: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Общий хелпер загрузки рыночных данных
-# Используется в _worker_scan и _worker_signal.
+# Используется в _worker_scan и _worker_trade / _worker_signal.
 # ---------------------------------------------------------------------------
 
 def _load_calendar_events():
@@ -172,14 +173,14 @@ def _worker_scan() -> Tuple[str, str]:
     return short, html
 
 
-def _worker_signal(ticker_str: str) -> Tuple[str, str]:
+def _worker_trade(ticker_str: str) -> Tuple[str, str]:
     """
     Полный pipeline L0-L6 для одного тикера.
 
     Уровни:
         L0-L1  yfinance + Finviz → TickerData, TickerMetrics
         L2     LseHeuristicAgent или LlmTechnicalAgent (см. NYSE_LLM_TECHNICAL) → TechnicalSignal
-        L3-L4  Yahoo News → FinBERT → DraftImpulse → Gate (SKIP/LITE/FULL)
+        L3-L4  Новости (окно ``NYSE_NEWS_LOOKBACK_SIGNAL_HOURS``, дефолт 72 ч) → FinBERT → DraftImpulse → Gate
         L5     LLM новостей (если gate=FULL/LITE) → AggregatedNewsSignal
         L6     TradeBuilder (+ CalendarLlmAgent при NYSE_LLM_CALENDAR) → Trade
 
@@ -202,7 +203,7 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
         TradeBuilder, neutral_calendar_signal,
         format_trade, run_news_signal_pipeline,
     )
-    from pipeline.html_report import build_signal_html
+    from pipeline.html_report import build_trade_html
 
     gate_cfg = config_loader.get_pipeline_gate_threshold()
     ticker = _make_ticker(ticker_str)
@@ -217,6 +218,7 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
 
     cal_events = _load_calendar_events()
     oai = config_loader.get_openai_settings()
+    now = datetime.now(timezone.utc)
 
     # --- L2: технический сигнал (эвристика или structured LLM — NYSE_LLM_TECHNICAL=1) ---
     if oai and config_loader.use_llm_technical_signal():
@@ -227,7 +229,8 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
         sig = tech_agent.predict(ticker, list(ticker_data.values()), metrics_list)
 
     # --- L3: загрузка новостей и cheap_sentiment (FinBERT / API / price_pattern_boost) ---
-    articles = NewsSource(max_per_ticker=12, lookback_hours=72).get_articles([ticker])
+    lb = config_loader.news_lookback_hours_signal()
+    articles = NewsSource(max_per_ticker=12, lookback_hours=lb).get_articles([ticker])
     articles = [a for a in articles if a.ticker == ticker]
     articles = enrich_cheap_sentiment(articles)
 
@@ -243,7 +246,7 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
         regime_rule_confidence=0.85 if di.regime_stress > gate_cfg.regime_stress_min else 0.0,
         calendar_events=cal_events,
         article_count=len(articles),
-        now=datetime.now(timezone.utc),
+        now=now,
     )
     mode = decide_llm_mode(gate_cfg, gate_ctx)
 
@@ -280,13 +283,21 @@ def _worker_signal(ticker_str: str) -> Tuple[str, str]:
     fused   = builder.fuse_bias(sig, news_signal, calendar_signal)
 
     short_text = format_trade(trade, fused=fused, include_details=True)
-    html_content = build_signal_html(trade, fused=fused, articles=articles)
+    html_content = build_trade_html(
+        trade,
+        fused=fused,
+        articles=articles,
+        calendar_events=cal_events,
+        calendar_high_soon=gate_ctx.calendar_high_soon,
+        calendar_report_time=now,
+        headlines_lookback_hours=lb,
+    )
     return short_text, html_content
 
 
 def _worker_news(ticker_str: str) -> Tuple[str, str]:
     """
-    Заголовки за 48 ч + cheap_sentiment (FinBERT / API / price_pattern_boost).
+    Новости + геополитика (каналы) и макро-календарь; без L2–L6 торгового пайплайна.
 
     cheap_sentiment [-1, 1]:  > +0.05 → ▲,  < -0.05 → ▼,  иначе → ■
     Канал: INC (incremental) / REG (regime-macro) / POL (policy/rates).
@@ -295,28 +306,53 @@ def _worker_news(ticker_str: str) -> Tuple[str, str]:
     -------
     (short_text, html_content) — краткий список в чате + полный HTML-отчёт.
     """
+    from datetime import datetime, timezone
+
     from sources.news import Source as NewsSource
     from pipeline.sentiment import enrich_cheap_sentiment
     from pipeline.telegram_format import format_news_list
+    from pipeline.calendar_context import calendar_high_soon
     from pipeline.html_report import build_news_html
 
     ticker   = _make_ticker(ticker_str)
-    articles = NewsSource(max_per_ticker=10, lookback_hours=48).get_articles([ticker])
+    lb = config_loader.news_lookback_hours_news_cmd()
+    articles = NewsSource(max_per_ticker=10, lookback_hours=lb).get_articles([ticker])
     articles = [a for a in articles if a.ticker == ticker]
     if not articles:
         return f"Новостей для <b>{_h(ticker_str.upper())}</b> не найдено.", ""
 
     articles = enrich_cheap_sentiment(articles)
-    short_text   = format_news_list(ticker_str.upper(), articles)
-    html_content = build_news_html(ticker_str.upper(), articles)
+    short_text   = format_news_list(ticker_str.upper(), articles, lookback_hours=lb)
+
+    now = datetime.now(timezone.utc)
+    cal_events: list = []
+    cal_err = None
+    try:
+        from domain import Currency
+        from sources.ecalendar import Source as CalendarSource
+
+        cal_events = list(CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar())
+    except Exception as exc:
+        cal_err = f"{type(exc).__name__}: {exc}"[:400]
+
+    gch = calendar_high_soon(cal_events, now=now)
+    html_content = build_news_html(
+        ticker_str.upper(),
+        articles,
+        lookback_hours=lb,
+        calendar_events=cal_events,
+        calendar_high_soon=gch,
+        calendar_report_time=now,
+        calendar_load_error=cal_err,
+    )
     return short_text, html_content
 
 
-def _worker_news_signal(ticker_str: str) -> Tuple[str, str]:
+def _worker_signal(ticker_str: str) -> Tuple[str, str]:
     """
-    Полный debug-прогон pipeline L0–L6 → подробный HTML-отчёт.
+    Команда /signal: полный прогон pipeline L0–L6 → подробный HTML (техника, fusion, статьи, гейт, LLM, trade).
 
-    В чат — одна строка; весь анализ — в HTML-документе (7 секций).
+    В чат — кратко; весь разбор — в HTML-документе (секции ①–⑦).
     """
     from pipeline.debug_runner import run_debug_pipeline
     from pipeline.html_report import build_debug_report_html
@@ -345,7 +381,7 @@ def _worker_news_signal(ticker_str: str) -> Tuple[str, str]:
     if p is not None:
         side = "▲ LONG" if p.side.value == "long" else "▼ SHORT"
         short = (
-            f"🔬 <b>Debug pipeline: {_h(ticker_str.upper())}</b>\n"
+            f"📡 <b>Полный сигнал: {_h(ticker_str.upper())}</b>\n"
             f"{side}  Entry ${p.entry:,.2f} · TP {(p.take_profit-p.entry)/p.entry*100:+.1f}%"
             f" · SL {(p.stop_loss-p.entry)/p.entry*100:+.1f}%\n"
             f"Fused {trace.fused.value:+.3f} · Gate <b>{trace.llm_mode.upper()}</b>\n"
@@ -353,7 +389,7 @@ def _worker_news_signal(ticker_str: str) -> Tuple[str, str]:
         )
     else:
         short = (
-            f"🔬 <b>Debug pipeline: {_h(ticker_str.upper())}</b>\n"
+            f"📡 <b>Полный сигнал: {_h(ticker_str.upper())}</b>\n"
             f"NO TRADE · Fused {trace.fused.value:+.3f} · Gate <b>{trace.llm_mode.upper()}</b>\n"
             f"📎 Детальный отчёт — в документе"
         )
@@ -466,26 +502,23 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "📖 <b>Команды бота</b>\n\n"
 
-        "📈 /signal <code>TICKER</code>\n"
-        "Полный торговый сигнал: технический агент + FinBERT + LLM → Entry/TP/SL.\n"
-        "В чате — краткое резюме; HTML-отчёт со всеми деталями — в документе.\n"
-        "<i>Пример: /signal SNDK</i>\n\n"
+        "💼 /trade <code>TICKER</code>\n"
+        "Решение для входа: техника + новости + fusion → Entry/TP/SL (агрегат).\n"
+        "В чате — краткое резюме; HTML — в документе.\n"
+        "<i>Пример: /trade SNDK</i>\n\n"
+
+        "📡 /signal <code>TICKER</code>\n"
+        "Полный отчёт по пайплайну L0–L6: tech, fusion, статьи, DraftImpulse, Gate, LLM, trade.\n"
+        "<i>Пример: /signal SNDK</i> (раньше команда называлась <code>/news_signal</code>)\n\n"
 
         "📊 /scan\n"
         "Снапшот всех GAME_5M тикеров: цена, bias, RSI (~10 сек, без LLM).\n"
         "HTML-таблица — в документе.\n\n"
 
         "📰 /news <code>TICKER</code>\n"
-        "Заголовки за 48 ч с FinBERT-сентиментом.\n"
-        "▲ позитив  ■ нейтраль  ▼ негатив\n"
-        "<i>Каналы: INC = корп., REG = макро, POL = ставки · HTML-детали — в документе</i>\n"
+        "Новости и геополитика (INC/REG/POL) + макро-календарь; без торгового пайплайна.\n"
+        "▲ позитив  ■ нейтраль  ▼ негатив · окно ч: NYSE_NEWS_LOOKBACK_NEWS_HOURS\n"
         "<i>Пример: /news MU</i>\n\n"
-
-        "🔬 /news_signal <code>TICKER</code>\n"
-        "Debug-прогон всего pipeline L0–L6 с захватом промежуточных данных.\n"
-        "HTML-отчёт: ① Trade · ② Fusion · ③ Tech scores · ④ Articles · "
-        "⑤ DraftImpulse · ⑥ Gate · ⑦ LLM signal\n"
-        "<i>Пример: /news_signal SNDK</i>\n\n"
 
         "🏛 /status\n"
         "Статус торговой сессии NYSE/NASDAQ и текущее время ET.\n\n"
@@ -509,6 +542,26 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply_document(update, html, f"scan_{ts}.html")
     except Exception as exc:
         log.exception("scan error")
+        await _reply_error(update, f"❌ Ошибка: {exc}")
+
+
+async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if not args:
+        await update.message.reply_text("Укажи тикер: <code>/trade SNDK</code>", parse_mode=ParseMode.HTML)
+        return
+    ticker_str = args[0].upper()
+    await _send_thinking(update)
+    try:
+        from datetime import datetime
+        short, html = await _run_in_thread(_worker_trade, ticker_str)
+        await _reply(update, short)
+        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+        await _reply_document(update, html, f"trade_{ticker_str}_{ts}.html")
+    except ValueError as exc:
+        await _reply_error(update, f"❌ {exc}")
+    except Exception as exc:
+        log.exception("trade error for %s", ticker_str)
         await _reply_error(update, f"❌ Ошибка: {exc}")
 
 
@@ -553,25 +606,8 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_news_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    args = context.args
-    if not args:
-        await update.message.reply_text(
-            "Укажи тикер: <code>/news_signal SNDK</code>", parse_mode=ParseMode.HTML
-        )
-        return
-    ticker_str = args[0].upper()
-    await _send_thinking(update)
-    try:
-        from datetime import datetime
-        short, html = await _run_in_thread(_worker_news_signal, ticker_str)
-        await _reply(update, short)
-        ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
-        await _reply_document(update, html, f"debug_{ticker_str}_{ts}.html")
-    except ValueError as exc:
-        await _reply_error(update, f"❌ {exc}")
-    except Exception as exc:
-        log.exception("news_signal error for %s", ticker_str)
-        await _reply_error(update, f"❌ Ошибка: {exc}")
+    """Совместимость: то же, что /signal."""
+    await cmd_signal(update, context)
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -625,6 +661,7 @@ def build_application(token: str, proxy: Optional[str] = None) -> Application:
     app.add_handler(CommandHandler("start",       cmd_start))
     app.add_handler(CommandHandler("help",        cmd_help))
     app.add_handler(CommandHandler("scan",        cmd_scan))
+    app.add_handler(CommandHandler("trade",       cmd_trade))
     app.add_handler(CommandHandler("signal",      cmd_signal))
     app.add_handler(CommandHandler("news",        cmd_news))
     app.add_handler(CommandHandler("news_signal", cmd_news_signal))

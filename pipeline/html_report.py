@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pipeline.trade_builder import W_CAL, W_NEWS, W_TECH
 
@@ -151,17 +151,25 @@ def _debug_auto_analysis_html(t) -> str:
     )
 
 
-def _debug_calendar_macro_html(t) -> str:
+def _calendar_macro_block_html(
+    *,
+    events: List,
+    reference_time,
+    calendar_high_soon: bool,
+    load_error: Optional[str] = None,
+    section_title: str = "③b Макро-календарь",
+    gate_block_ref: str = "⑥",
+) -> str:
     """
-    Макро-события из того же источника, что и гейт (ecalendar).
-    Объясняет, почему во fusion Calendar может быть 0 при наличии строк в таблице.
+    Таблица макро-событий (ecalendar) + пояснение к fusion и гейту.
+    Общая разметка для /trade, /news и полного /signal.
     """
-    from datetime import timezone
+    from datetime import datetime, timezone
 
     import config_loader
     from domain import CalendarEventImportance
 
-    def _utc(dt):
+    def _utc(dt: datetime) -> datetime:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
@@ -169,10 +177,7 @@ def _debug_calendar_macro_html(t) -> str:
     config_loader.load_config_env()
     mb = config_loader.calendar_high_before_minutes()
     ma = config_loader.calendar_high_after_minutes()
-    now = _utc(t.generated_at)
-
-    err = getattr(t, "calendar_load_error", None)
-    evs = list(getattr(t, "calendar_events", None) or [])
+    now = _utc(reference_time)
 
     intro = (
         "Источник: Investing.com, макро по валютам <strong>GBP / JPY / EUR</strong> "
@@ -184,13 +189,14 @@ def _debug_calendar_macro_html(t) -> str:
     )
 
     head = (
-        '<div id="bcal"><h2>③b Макро-календарь</h2>'
+        f'<div id="bcal"><h2>{_h(section_title)}</h2>'
         f'<p class="meta">{intro}</p>'
     )
 
-    if err:
-        return head + f'<p class="neg">Ошибка загрузки: {_h(err)}</p></div>'
+    if load_error:
+        return head + f'<p class="neg">Ошибка загрузки: {_h(load_error)}</p></div>'
 
+    evs = list(events or [])
     if not evs:
         return (
             head
@@ -218,7 +224,6 @@ def _debug_calendar_macro_html(t) -> str:
             "</tr>"
         )
 
-    gch = t.gate_ctx.calendar_high_soon
     tbl = (
         f"<p>Всего в сырье: <strong>{len(evs)}</strong> (показано до 100 по времени).</p>"
         "<table><thead><tr>"
@@ -227,34 +232,184 @@ def _debug_calendar_macro_html(t) -> str:
         "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
-        f'<p class="meta">На момент отчёта <code>calendar_high_soon={gch}</code> (блок ⑥). '
+        f'<p class="meta">На момент отчёта <code>calendar_high_soon={calendar_high_soon}</code> (блок {gate_block_ref}). '
         "Если все события <em>moderate</em> или вне окна — флаг остаётся False.</p>"
         "</div>"
     )
     return head + tbl
 
 
+def _debug_calendar_macro_html(t) -> str:
+    """Обёртка: те же данные, что в ``PipelineDebugTrace``."""
+    return _calendar_macro_block_html(
+        events=list(getattr(t, "calendar_events", None) or []),
+        reference_time=t.generated_at,
+        calendar_high_soon=t.gate_ctx.calendar_high_soon,
+        load_error=getattr(t, "calendar_load_error", None),
+        section_title="③b Макро-календарь",
+        gate_block_ref="⑥",
+    )
+
+
+# Коэффициенты штрафа за stress — те же, что в ``draft.single_scalar_draft_bias``.
+_REGIME_STRESS_COEFF = 0.15
+_POLICY_STRESS_COEFF = 0.1
+
+
+def _split_geo_and_corp_news_html(
+    articles: List,
+    *,
+    reference_time: datetime,
+    headlines_lookback_hours: int,
+    draft_impulse_obj: Optional[object] = None,
+    geo_heading: str = "③c Геополитика и режим (REG)",
+    corp_heading: str = "Обычные новости (INC / POL)",
+    geo_anchor: str = "bgeo",
+    corp_anchor: str = "bcorp",
+) -> Tuple[str, str]:
+    """
+    Два блока: (1) INC+POL без REG, (2) только REG + метрики L3 (regime/policy stress и вклад в draft_bias).
+
+    Если ``draft_impulse_obj`` передан (``PipelineDebugTrace.draft_impulse``), числа берутся из него;
+    иначе пересчёт из ``articles`` на ``reference_time``.
+    """
+    from pipeline.channels import classify_channel, story_type_ru
+    from pipeline.draft import draft_impulse, scored_from_news_articles, single_scalar_draft_bias
+    from pipeline.types import NewsImpactChannel
+
+    if not articles:
+        return "", ""
+
+    if draft_impulse_obj is None:
+        scored = scored_from_news_articles(articles)
+        di = draft_impulse(scored, now=reference_time)
+    else:
+        di = draft_impulse_obj  # type: ignore[assignment]
+
+    reg_list: List = []
+    corp_list: List = []
+    for a in articles:
+        ch, _ = classify_channel(a.title, getattr(a, "summary", None))
+        if ch == NewsImpactChannel.REGIME:
+            reg_list.append(a)
+        else:
+            corp_list.append(a)
+
+    pen_reg = _REGIME_STRESS_COEFF * float(di.regime_stress)
+    pen_pol = _POLICY_STRESS_COEFF * float(di.policy_stress)
+    d_scalar = single_scalar_draft_bias(di)
+
+    meta_geo = (
+        f'<p class="meta">Слой <strong>L3 (до LLM)</strong>: по каналам считается '
+        f'<code>DraftImpulse</code>, затем скаляр для гейта '
+        f"<code>draft_bias_incremental − {_REGIME_STRESS_COEFF}×regime_stress "
+        f"− {_POLICY_STRESS_COEFF}×policy_stress</code>. "
+        f"<strong>Это не строка Fusion 55/30/15</strong> (там отдельно LLM-новости и календарь). "
+        f"<br>"
+        f"draft_bias (только INC): <code>{di.draft_bias_incremental:+.4f}</code> · "
+        f"regime_stress: <code>{di.regime_stress:.4f}</code> "
+        f"(статей REG: {di.articles_regime}) → "
+        f"штраф <code>−{pen_reg:.4f}</code> · "
+        f"policy_stress: <code>{di.policy_stress:.4f}</code> "
+        f"(статей POL: {di.articles_policy}) → штраф <code>−{pen_pol:.4f}</code> · "
+        f"<strong>итого single_scalar_draft_bias = {d_scalar:+.4f}</strong></p>"
+    )
+
+    def _row(i: int, a: object) -> str:
+        score = getattr(a, "cheap_sentiment", None) or 0.0
+        ch, _ = classify_channel(a.title, getattr(a, "summary", None))
+        ch_val = ch.value[:3].upper()
+        story = story_type_ru(ch)
+        prov = getattr(a, "provider_id", None) or "—"
+        score_class = "pos" if score > 0.05 else ("neg" if score < -0.05 else "neu")
+        bar = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
+        summary = getattr(a, "summary", "") or ""
+        title_full = _h(a.title)
+        if summary:
+            title_full += f'<br><small style="color:#8b949e">{_h(summary[:120])}</small>'
+        ts = getattr(a, "timestamp", None)
+        ts_str = ts.strftime("%m-%d %H:%M") if ts else "—"
+        return (
+            f"<tr>"
+            f"<td>{i}</td>"
+            f'<td><span class="tag">{_h(ch_val)}</span></td>'
+            f'<td><span class="tag">{_h(story)}</span></td>'
+            f'<td><span class="tag">{_h(str(prov))}</span></td>'
+            f"<td>{title_full}</td>"
+            f'<td class="score {score_class}">{bar} {score:+.2f}</td>'
+            f"<td>{ts_str}</td>"
+            f"</tr>"
+        )
+
+    corp_rows = "".join(_row(i, a) for i, a in enumerate(corp_list, 1))
+    reg_rows = "".join(_row(i, a) for i, a in enumerate(reg_list, 1))
+
+    corp_html = (
+        f'<div id="{corp_anchor}"><h2>{_h(corp_heading)}</h2>'
+        f'<p class="meta">Окно {headlines_lookback_hours} ч · без канала REG '
+        f"(корпоративный слой и монетарная политика по тексту). "
+        f'<a href="#{geo_anchor}" style="color:#58a6ff">Геополитика (REG) →</a></p>'
+        + (
+            "<table><thead><tr>"
+            "<th>#</th><th>Канал</th><th>Сюжет</th><th>API</th>"
+            "<th>Заголовок</th><th>Score</th><th>Время</th>"
+            "</tr></thead><tbody>"
+            f"{corp_rows}"
+            "</tbody></table>"
+            if corp_rows
+            else "<p><em>В окне нет статей INC/POL (все попали в REG или список пуст).</em></p>"
+        )
+        + "</div>"
+    )
+
+    geo_html = (
+        f'<div id="{geo_anchor}"><h2>{_h(geo_heading)}</h2>'
+        f"{meta_geo}"
+        + (
+            "<table><thead><tr>"
+            "<th>#</th><th>Канал</th><th>Сюжет</th><th>API</th>"
+            "<th>Заголовок</th><th>Score</th><th>Время</th>"
+            "</tr></thead><tbody>"
+            f"{reg_rows}"
+            "</tbody></table>"
+            if reg_rows
+            else "<p><em>В окне нет статей с каналом REG.</em></p>"
+        )
+        + '<p style="color:#8b949e;font-size:0.8em">REG — гео/энерго/режим по правилам '
+        "<code>classify_channel</code>; отдельно от макро-календаря (релизы CPI и т.д.).</p>"
+        "</div>"
+    )
+
+    return corp_html, geo_html
+
+
 # ---------------------------------------------------------------------------
 # /signal — полный торговый сигнал
 # ---------------------------------------------------------------------------
 
-def build_signal_html(
+def build_trade_html(
     trade,
     *,
     fused=None,
     articles: Optional[List] = None,
+    calendar_events: Optional[List] = None,
+    calendar_high_soon: Optional[bool] = None,
+    calendar_report_time: Optional[datetime] = None,
+    calendar_load_error: Optional[str] = None,
+    headlines_lookback_hours: Optional[int] = None,
 ) -> str:
     """
-    HTML-отчёт для /signal TICKER.
+    HTML-отчёт для /trade TICKER (агрегированное решение для входа).
 
     Разделы:
       1. Заголовок: тикер, направление, Entry/TP/SL
-      2. Fusion breakdown: Tech / News / Fused
-      3. Technical summary
-      4. News headlines с cheap_sentiment (если переданы articles)
+      2. Fusion breakdown: Tech / News / Calendar / Fused
+      3. Макро-календарь (если переданы ``calendar_events`` — те же сырые события, что и у гейта)
+      4–5. Обычные новости (INC/POL) и блок геополитики (REG) с метриками L3 / ``single_scalar_draft_bias``
+      6. Technical summary
+      7. News LLM summary (если есть)
     """
     from domain import Direction, PositionType
-    from pipeline.channels import classify_channel
 
     ticker_val = trade.ticker.value if hasattr(trade.ticker, "value") else str(trade.ticker)
 
@@ -302,6 +457,33 @@ def build_signal_html(
         )
         fusion_html += "</tbody></table>"
 
+    # --- Макро-календарь (как в полном /signal: ecalendar + окно HIGH для гейта) ---
+    calendar_html = ""
+    if calendar_events is not None:
+        calendar_html = _calendar_macro_block_html(
+            events=calendar_events,
+            reference_time=calendar_report_time or datetime.now(timezone.utc),
+            calendar_high_soon=bool(calendar_high_soon),
+            load_error=calendar_load_error,
+            section_title="Макро-календарь",
+            gate_block_ref="L4",
+        )
+
+    # --- Новости: обычные (INC/POL) + геополитика (REG) с вкладом в L3 ---
+    split_news_html = ""
+    if articles:
+        h_lb = headlines_lookback_hours if headlines_lookback_hours is not None else 72
+        ref_t = calendar_report_time or datetime.now(timezone.utc)
+        corp_h, geo_h = _split_geo_and_corp_news_html(
+            articles,
+            reference_time=ref_t,
+            headlines_lookback_hours=h_lb,
+            draft_impulse_obj=None,
+            geo_heading="Геополитика и режим (REG)",
+            corp_heading="Обычные новости (INC / POL)",
+        )
+        split_news_html = corp_h + geo_h
+
     # --- Tech summary ---
     tech_html = ""
     if trade.technical_summary:
@@ -317,88 +499,70 @@ def build_signal_html(
         for line in news_lines:
             news_llm_html += f'<p class="summary">{_h(line)}</p>'
 
-    # --- Headlines таблица ---
-    headlines_html = ""
-    if articles:
-        headlines_html = (
-            "<h2>Заголовки (48 ч)</h2>"
-            "<table><thead><tr>"
-            "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок</th><th>Score</th>"
-            "</tr></thead><tbody>"
-        )
-        for i, a in enumerate(articles, 1):
-            score = a.cheap_sentiment or 0.0
-            ch, _ = classify_channel(a.title, getattr(a, "summary", None))
-            ch_val = ch.value[:3].upper()
-            prov = getattr(a, "provider_id", None) or "—"
-            score_class = "pos" if score > 0.05 else ("neg" if score < -0.05 else "neu")
-            bar = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
-            summary = getattr(a, "summary", "") or ""
-            title_full = _h(a.title)
-            if summary:
-                title_full += f'<br><small style="color:#8b949e">{_h(summary[:120])}</small>'
-            headlines_html += (
-                f"<tr>"
-                f"<td>{i}</td>"
-                f'<td><span class="tag">{_h(ch_val)}</span></td>'
-                f'<td><span class="tag">{_h(str(prov))}</span></td>'
-                f"<td>{title_full}</td>"
-                f'<td class="score {score_class}">{bar} {score:+.2f}</td>'
-                f"</tr>"
-            )
-        headlines_html += "</tbody></table>"
+    body = (
+        header
+        + fusion_html
+        + calendar_html
+        + split_news_html
+        + tech_html
+        + news_llm_html
+    )
+    return _wrap(f"{ticker_val} Trade", body)
 
-    body = header + fusion_html + tech_html + news_llm_html + headlines_html
-    return _wrap(f"{ticker_val} Signal", body)
+
+build_signal_html = build_trade_html  # совместимость со старыми импортами
 
 
 # ---------------------------------------------------------------------------
 # /news — список заголовков
 # ---------------------------------------------------------------------------
 
-def build_news_html(ticker_val: str, articles: List) -> str:
+def build_news_html(
+    ticker_val: str,
+    articles: List,
+    *,
+    lookback_hours: int = 48,
+    calendar_events: Optional[List] = None,
+    calendar_high_soon: Optional[bool] = None,
+    calendar_report_time: Optional[datetime] = None,
+    calendar_load_error: Optional[str] = None,
+) -> str:
     """
-    HTML-отчёт для /news TICKER.
-    Полная таблица заголовков с сентиментом, каналом и summary.
+    HTML-отчёт для /news TICKER: макро-календарь + новости (INC/POL) и геополитика (REG).
+    ``lookback_hours`` — для подписи (должен совпадать с загрузкой в боте).
+    Если передан ``calendar_events`` (в т.ч. пустой список), сверху показывается блок календаря.
     """
-    from pipeline.channels import classify_channel
-
-    rows = ""
-    for i, a in enumerate(articles, 1):
-        score = a.cheap_sentiment or 0.0
-        ch, conf = classify_channel(a.title, getattr(a, "summary", None))
-        ch_val = ch.value[:3].upper()
-        score_class = "pos" if score > 0.05 else ("neg" if score < -0.05 else "neu")
-        bar = "▲" if score > 0.05 else ("▼" if score < -0.05 else "■")
-        summary = getattr(a, "summary", "") or ""
-        ts = getattr(a, "timestamp", None)
-        ts_str = ts.strftime("%m-%d %H:%M") if ts else "—"
-        title_cell = _h(a.title)
-        if summary:
-            title_cell += f'<br><small style="color:#8b949e">{_h(summary[:150])}</small>'
-        prov = getattr(a, "provider_id", None) or "—"
-        rows += (
-            f"<tr>"
-            f"<td>{i}</td>"
-            f'<td><span class="tag">{_h(ch_val)}</span></td>'
-            f'<td><span class="tag">{_h(str(prov))}</span></td>'
-            f"<td>{title_cell}</td>"
-            f'<td class="score {score_class}">{bar} {score:+.2f}</td>'
-            f"<td>{ts_str}</td>"
-            f"</tr>"
+    ref_t = calendar_report_time or datetime.now(timezone.utc)
+    cal_html = ""
+    if calendar_events is not None:
+        cal_html = _calendar_macro_block_html(
+            events=calendar_events,
+            reference_time=ref_t,
+            calendar_high_soon=bool(calendar_high_soon),
+            load_error=calendar_load_error,
+            section_title="Макро-календарь",
+            gate_block_ref="L4",
         )
 
+    corp_h, geo_h = _split_geo_and_corp_news_html(
+        articles,
+        reference_time=ref_t,
+        headlines_lookback_hours=lookback_hours,
+        draft_impulse_obj=None,
+        geo_heading="Геополитика и режим (REG)",
+        corp_heading="Обычные новости (INC / POL)",
+    )
+
     body = (
-        f"<h1>📰 {_h(ticker_val)} — новости</h1>"
-        f'<p class="meta">{_now_str()} · {len(articles)} статей за 48 ч</p>'
-        "<table><thead><tr>"
-        "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок</th><th>Score</th><th>Время</th>"
-        "</tr></thead><tbody>"
-        f"{rows}"
-        "</tbody></table>"
+        f"<h1>📰 {_h(ticker_val)} — новости · геополитика · календарь</h1>"
+        f'<p class="meta">{_now_str()} · {len(articles)} статей за {lookback_hours} ч</p>'
+        f"{cal_html}{corp_h}{geo_h}"
         "<p style='color:#8b949e;font-size:0.8em;margin-top:16px'>"
-        "INC = корп. новость · REG = макро/режим · POL = ставки/политика<br>"
-        "Источник: <code>provider_id</code> (yfinance, newsapi, marketaux, …)<br>"
+        "<strong>Каналы новостей:</strong> INC — эмитент/отрасль; "
+        "REG — геополитика и энерго/режим рынка (войны, санкции, нефть); "
+        "POL — <em>монетарная</em> политика (Fed, ECB, ставки). "
+        "Выборы и «политика» без Fed обычно INC. "
+        "<strong>Календарь</strong> — макро-релизы (отдельный источник, не заголовки Yahoo).<br>"
         "Score: FinBERT/API/price_pattern_boost [-1..+1]"
         "</p>"
     )
@@ -451,7 +615,7 @@ def build_scan_html(signals: list) -> str:
 
 def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     """
-    Полный HTML-отчёт для /news_signal TICKER.
+    Полный HTML-отчёт для /signal TICKER (все уровни L0–L6).
 
     Секции (сверху вниз):
       0. Краткий разбор (автотекст по числам trace)
@@ -459,11 +623,14 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
       2. Fusion breakdown (tech/news contributions)
       3. Technical Signal (все score-поля)
       3b. Макро-календарь (сырьё ecalendar + окно гейта)
-      4. L3 — Статьи с cheap_sentiment + канал
+      3c / 3c′. Обычные новости (INC/POL) и геополитика (REG) с метриками L3
+      4. L3 — Статьи с cheap_sentiment + канал (полный список)
       5. L3 — DraftImpulse (per-channel stats)
       6. L4 — Gate decision (context + LLMMode + reason)
       7. L5 — AggregatedNewsSignal + per-item (если LLM запускался)
     """
+    import config_loader as _cfg_dbg
+
     from domain import Direction
 
     t = trace  # короткий псевдоним
@@ -512,7 +679,10 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     cal_fusion_note = (
         '<p class="meta">Calendar во fusion: при выключенном <code>NYSE_LLM_CALENDAR</code> '
         'в сделку идёт нейтральный календарный сигнал (bias 0). Список макро-событий — '
-        '<a href="#bcal" style="color:#58a6ff">③b Макро-календарь</a>.</p>'
+        '<a href="#bcal" style="color:#58a6ff">③b Макро-календарь</a>. '
+        'Вклад геополитики в <strong>черновой</strong> гейт (L3), не в строку Fusion — '
+        '<a href="#bgeo" style="color:#58a6ff">③c REG</a> / '
+        '<a href="#bcorp" style="color:#58a6ff">③c′ INC·POL</a>.</p>'
     )
     b2 = (
         "<h2>② Fusion Breakdown</h2>"
@@ -590,6 +760,9 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     def _sent_bar(v: float) -> str:
         return "▲" if v > 0.05 else ("▼" if v < -0.05 else "■")
 
+    from pipeline.channels import story_type_ru
+    from pipeline.types import NewsImpactChannel as _NIC
+
     art_rows = ""
     for i, (a, ch) in enumerate(zip(t.articles, t.article_channels), 1):
         sc = a.cheap_sentiment or 0.0
@@ -597,10 +770,12 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         in_llm = "✓" if a in t.llm_batch_articles else ""
         summ = _h((a.summary or "")[:120])
         prov = getattr(a, "provider_id", None) or "—"
+        story = story_type_ru(_NIC(ch))
         art_rows += (
             f"<tr>"
             f"<td>{i}</td>"
             f'<td><span class="tag">{_h(ch[:3].upper())}</span></td>'
+            f'<td><span class="tag">{_h(story)}</span></td>'
             f'<td><span class="tag">{_h(str(prov))}</span></td>'
             f"<td>{_h(a.title)}"
             + (f"<br><small style='color:#8b949e'>{summ}</small>" if summ else "")
@@ -615,13 +790,13 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         f"<h2>④ L3 — Статьи + cheap_sentiment ({len(t.articles)} статей, "
         f"lookback {t.profile.max_articles_full_batch*6}h)</h2>"
         "<table><thead><tr>"
-        "<th>#</th><th>Канал</th><th>Источник</th><th>Заголовок / Summary</th>"
+        "<th>#</th><th>Канал</th><th>Сюжет</th><th>API</th><th>Заголовок / Summary</th>"
         "<th>Score</th><th>Время</th><th>→LLM</th>"
         "</tr></thead><tbody>"
         + art_rows
         + "</tbody></table>"
         "<p style='color:#8b949e;font-size:0.8em'>"
-        "INC=incremental корп. · REG=regime макро · POL=policy ставки · "
+        "INC/REG/POL — классификация заголовка; REG ≠ календарь (календарь — ③b). "
         "✓ = вошла в LLM-батч</p>"
     )
 
@@ -691,13 +866,18 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     # -----------------------------------------------------------------------
     ns = t.news_signal
     if ns is not None and ns.items:
+        from pipeline.channels import classify_channel as _cll, story_type_ru as _stru
+
         item_rows = ""
         for i, (item, a) in enumerate(zip(ns.items, t.llm_batch_articles), 1):
             sc = item.sentiment
             prov = getattr(a, "provider_id", None) or "—"
+            _ch = _cll(a.title, getattr(a, "summary", None))[0]
+            story = _stru(_ch)
             item_rows += (
                 f"<tr>"
                 f"<td>{i}</td>"
+                f'<td><span class="tag">{_h(story)}</span></td>'
                 f'<td><span class="tag">{_h(str(prov))}</span></td>'
                 f"<td>{_h(a.title[:70])}</td>"
                 f'<td class="score {_fcls(sc)}">{_sent_bar(sc)} {sc:+.2f}</td>'
@@ -711,7 +891,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         llm_table = (
             "<h3>Per-article LLM signals</h3>"
             "<table><thead><tr>"
-            "<th>#</th><th>Источник</th><th>Заголовок</th><th>Sentiment</th>"
+            "<th>#</th><th>Сюжет</th><th>API</th><th>Заголовок</th><th>Sentiment</th>"
             "<th>Impact</th><th>Relevance</th><th>Surprise</th>"
             "<th>Horizon</th><th>Conf</th>"
             "</tr></thead><tbody>"
@@ -741,6 +921,17 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     # -----------------------------------------------------------------------
     b0 = _debug_auto_analysis_html(t)
     bcal = _debug_calendar_macro_html(t)
+    _cfg_dbg.load_config_env()
+    _h_lb = _cfg_dbg.news_lookback_hours_signal()
+    _corp_dbg, _geo_dbg = _split_geo_and_corp_news_html(
+        t.articles,
+        reference_time=t.generated_at,
+        headlines_lookback_hours=_h_lb,
+        draft_impulse_obj=t.draft_impulse,
+        geo_heading="③c Геополитика и режим (REG)",
+        corp_heading="③c′ Обычные новости (INC / POL)",
+    )
+    b_geo_corp = _corp_dbg + _geo_dbg
     nav = (
         '<nav style="margin-bottom:20px;padding:10px;background:#161b22;'
         'border-radius:6px;font-size:0.85em">'
@@ -750,6 +941,8 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         '<a href="#b2" style="color:#58a6ff">② Fusion</a> · '
         '<a href="#b3" style="color:#58a6ff">③ Technical</a> · '
         '<a href="#bcal" style="color:#58a6ff">③b Cal</a> · '
+        '<a href="#bcorp" style="color:#58a6ff">③c′ INC·POL</a> · '
+        '<a href="#bgeo" style="color:#58a6ff">③c REG</a> · '
         '<a href="#b4" style="color:#58a6ff">④ Articles</a> · '
         '<a href="#b5" style="color:#58a6ff">⑤ DraftImpulse</a> · '
         '<a href="#b6" style="color:#58a6ff">⑥ Gate</a> · '
@@ -767,6 +960,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         + _anchor("b2", b2)
         + _anchor("b3", b3)
         + bcal
+        + b_geo_corp
         + _anchor("b4", b4)
         + _anchor("b5", b5)
         + _anchor("b6", b6)
@@ -778,4 +972,4 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
         f"regime_min={t.profile.regime_stress_min}</p>"
     )
 
-    return _wrap(f"{ticker_val} Debug Pipeline", body)
+    return _wrap(f"{ticker_val} Signal (full)", body)

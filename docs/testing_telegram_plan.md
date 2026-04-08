@@ -62,10 +62,11 @@ pytest tests/ -q
 
 | Команда | Действие |
 |---------|----------|
-| `/news <TICKER>` | `sources.NewsSource → enrich_cheap_sentiment → DraftImpulse → decide_llm_mode`; ответ: число статей, bias, режим (SKIP/LITE/FULL), 2–3 заголовка |
-| `/signal <TICKER>` | Полный пайплайн уровней 1–5 → `AggregatedNewsSignal`: bias, confidence, summary |
-| `/articles <TICKER>` | Только сырые заголовки без LLM (проверка источников) |
-| `/gate <TICKER>` | Показать `GateContext` — draft_bias, regime_stress, article_count, calendar_high_soon |
+| `/news <TICKER>` | Заголовки + сентимент + макро-календарь (реализовано в `bot/nyse_bot.py`; без полного trade pipeline) |
+| `/trade <TICKER>` | Полный пайплайн L0–L6 → Trade / Fused (агрегат для входа) |
+| `/signal <TICKER>` | Полный HTML-отчёт L0–L6 с промежуточными данными (`run_debug_pipeline`; бывший `/news_signal`) |
+| `/articles <TICKER>` | Только сырые заголовки без LLM (проверка источников) — *план* |
+| `/gate <TICKER>` | Показать `GateContext` — *план* |
 
 ### Реализация
 
@@ -87,5 +88,5 @@ nyse/
 2. Добавить зависимость в `pyproject.toml`.
 3. Проверить `/articles` — самый простой path (no LLM, no gate).
 4. Добавить `/gate` — вывод `GateContext` plain text.
-5. Добавить `/signal` — полный пайплайн.
+5. Добавить `/trade` — полный пайплайн до Trade (см. актуальные команды в `docs/bot.md`).
 6. Unit-тест для форматтера вывода (текстовый рендер `AggregatedNewsSignal`).
