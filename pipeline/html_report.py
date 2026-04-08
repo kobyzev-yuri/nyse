@@ -40,6 +40,9 @@ tr:hover td { background: #161b22; }
 .tag   { background: #21262d; border-radius: 4px; padding: 1px 6px; font-size: 0.8em; }
 .score { font-size: 0.85em; font-family: monospace; }
 .summary { color: #c9d1d9; font-size: 0.9em; line-height: 1.5; }
+.analysis-box h2 { color: #58a6ff; font-size: 1.05em; margin-top: 0; }
+.analysis-box p { margin: 0 0 10px 0; line-height: 1.55; color: #c9d1d9; font-size: 0.9em; }
+.analysis-box p:last-child { margin-bottom: 0; }
 """
 
 
@@ -59,6 +62,92 @@ def _wrap(title: str, body: str) -> str:
         f"<style>{_CSS}</style></head><body>"
         f"{body}"
         "</body></html>"
+    )
+
+
+def _debug_auto_analysis_html(t) -> str:
+    """
+    Краткий автоматический разбор для debug-отчёта (тот же контекст, что таблицы;
+    без LLM — только эвристики по числам trace).
+    """
+    fused = t.fused
+    tech = t.tech_signal
+    mode_val = getattr(t.llm_mode, "value", str(t.llm_mode)).lower()
+    paras: list[str] = []
+
+    if t.trade.position is None:
+        _fv = fused.value
+        _fcls = "pos" if _fv > 0 else ("neg" if _fv < 0 else "neu")
+        paras.append(
+            "<strong>Почему NO TRADE:</strong> итоговый fused bias "
+            f'<span class="score {_fcls}">{_fv:+.3f}</span>, confidence {fused.confidence:.2f}. '
+            "Позиция не строится при слабом сигнале / низкой tradeability / фильтрах TradeBuilder "
+            "(см. блок ①)."
+        )
+    else:
+        paras.append(
+            "См. блок ①: сформирована позиция (Entry / TP / SL) при прохождении порогов."
+        )
+
+    ac = abs(fused.tech_contrib)
+    an = abs(fused.news_contrib)
+    al = abs(fused.cal_contrib)
+    if an >= ac and an >= al and fused.news_available:
+        dom = "новости (LLM-агрегат)"
+    elif al >= ac and al >= an:
+        dom = "календарь"
+    else:
+        dom = "техника (эвристика)"
+    paras.append(
+        f"<strong>Fusion:</strong> по модулю вклада доминирует «{dom}» "
+        f"(tech {fused.tech_contrib:+.3f} · news {fused.news_contrib:+.3f} · cal {fused.cal_contrib:+.3f})."
+    )
+    if not fused.news_available:
+        paras.append(
+            "Новостной вклад в fusion без LLM: вес news фактически на нейтральном агрегате "
+            "(см. «News LLM: нет агрегата» выше)."
+        )
+
+    if tech.trend_score < -0.15 and tech.bias > 0.05:
+        paras.append(
+            "<strong>Техника:</strong> отрицательный trend_score при слегка бычьем суммарном bias — "
+            "рассогласование «направление SMA vs импульс/пробой»; интерпретировать осторожно."
+        )
+    elif tech.trend_score > 0.15 and tech.bias < -0.05:
+        paras.append(
+            "<strong>Техника:</strong> положительный trend_score при слегка медвежьем bias — "
+            "смешанная картина."
+        )
+
+    paras.append(
+        f"<strong>Гейт L4 ({mode_val.upper()}):</strong> {_h(t.gate_reason)}"
+    )
+    if mode_val == "skip" and len(t.articles) > t.profile.max_articles_full_batch:
+        paras.append(
+            "Ветка «тихий рынок» (<code>|draft_bias| &lt; t1</code> без REGIME) в "
+            "<code>decide_llm_mode</code> выполняется <em>раньше</em> проверки числа статей — "
+            f"поэтому при {len(t.articles)} статей news-LLM всё равно может не вызываться."
+        )
+
+    ab = abs(t.draft_bias)
+    t1 = t.profile.t1_abs_draft_bias
+    if mode_val == "skip" and ab >= t1 * 0.65 and ab < t1:
+        paras.append(
+            f"<strong>Калибровка:</strong> |draft_bias|={ab:.3f} близко к t1={t1:.3f}. "
+            "Чтобы чаще получать FULL/LITE при таком фоне, можно снизить "
+            "<code>NYSE_GATE_T1</code> (см. <code>docs/calibration.md</code>)."
+        )
+
+    body = "".join(f"<p>{p}</p>" for p in paras)
+    return (
+        '<div id="b0" class="analysis-box" style="margin-bottom:20px;padding:12px 14px;'
+        'background:#161b22;border-radius:6px;border-left:4px solid #58a6ff">'
+        "<h2>Краткий разбор</h2>"
+        f"{body}"
+        '<p style="color:#8b949e;font-size:0.8em;margin-top:10px;margin-bottom:0">'
+        "Автоматический текст по числам отчёта; не заменяет разбор трейдера."
+        "</p>"
+        "</div>"
     )
 
 
@@ -277,7 +366,8 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     Полный HTML-отчёт для /news_signal TICKER.
 
     Секции (сверху вниз):
-      1. Trade Signal (по шаблону Керима: Entry/TP/SL/conf/fused)
+      0. Краткий разбор (автотекст по числам trace)
+      1. Trade Signal (Entry/TP/SL или NO TRADE)
       2. Fusion breakdown (tech/news contributions)
       3. Technical Signal (все score-поля)
       4. L3 — Статьи с cheap_sentiment + канал
@@ -551,10 +641,12 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
     # -----------------------------------------------------------------------
     # Навигация + сборка
     # -----------------------------------------------------------------------
+    b0 = _debug_auto_analysis_html(t)
     nav = (
         '<nav style="margin-bottom:20px;padding:10px;background:#161b22;'
         'border-radius:6px;font-size:0.85em">'
         "<b>Перейти к:</b> "
+        '<a href="#b0" style="color:#58a6ff">Краткий разбор</a> · '
         '<a href="#b1" style="color:#58a6ff">① Trade</a> · '
         '<a href="#b2" style="color:#58a6ff">② Fusion</a> · '
         '<a href="#b3" style="color:#58a6ff">③ Technical</a> · '
@@ -570,6 +662,7 @@ def build_debug_report_html(trace) -> str:  # trace: PipelineDebugTrace
 
     body = (
         nav
+        + b0
         + _anchor("b1", b1)
         + _anchor("b2", b2)
         + _anchor("b3", b3)
