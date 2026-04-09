@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 """
-Tech subpackage (L2).
-
-Этап 1 миграции: новые импорты ``pipeline.tech.*`` ведут в существующий пакет
-``pipeline.technical`` (без переносов файлов и без поломок).
+Tech subpackage (L2): эвристический и LLM-технический агент, фичи свечей.
 """
 
-from ..technical import *  # noqa: F401,F403
+from .agents import *  # noqa: F401,F403

@@ -9,7 +9,7 @@ from typing import List
 
 from domain import Candle, TickerData
 
-from ..market_dto import CandleFeaturesInput
+from ...market_dto import CandleFeaturesInput
 
 
 def calculate_candle_features(ticker_data: TickerData) -> CandleFeaturesInput:

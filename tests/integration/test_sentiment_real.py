@@ -159,7 +159,7 @@ def test_finbert_cache_avoids_second_load(require_finbert, tmp_path):
     cache = FileCache(tmp_path, default_ttl_sec=3600)
 
     with patch(
-        "pipeline.sentiment.local_sentiment_minus1_to_1",
+        "pipeline.news.sentiment.local_sentiment_minus1_to_1",
         wraps=lambda text, model_name: 0.75,
     ) as mock_fn:
         s1 = resolve_cheap_sentiment(a, use_local=True, model_name=require_finbert, cache=cache)

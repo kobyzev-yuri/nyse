@@ -42,7 +42,7 @@ def test_resolve_prefers_raw_sentiment_from_api():
     from pipeline.sentiment import resolve_cheap_sentiment
 
     a = _article(raw=0.7)
-    with patch("pipeline.sentiment.local_sentiment_minus1_to_1") as mock_local:
+    with patch("pipeline.news.sentiment.local_sentiment_minus1_to_1") as mock_local:
         s = resolve_cheap_sentiment(a, use_local=True)
         mock_local.assert_not_called()
     assert s == pytest.approx(0.7)
@@ -65,7 +65,7 @@ def test_resolve_calls_local_when_no_raw_and_use_local_true():
 
     a = _article(raw=None, title="NVDA up", summary="beat")
     with patch(
-        "pipeline.sentiment.local_sentiment_minus1_to_1",
+        "pipeline.news.sentiment.local_sentiment_minus1_to_1",
         return_value=0.4,
     ) as mock_local:
         s = resolve_cheap_sentiment(a, use_local=True, model_name="ProsusAI/finbert")
@@ -96,7 +96,7 @@ def test_enrich_cheap_sentiment_sets_field_on_all():
 
     a = _article(raw=0.2)
     b = _article(raw=None, title="only title")
-    with patch("pipeline.sentiment.resolve_cheap_sentiment") as mock_r:
+    with patch("pipeline.news.sentiment.resolve_cheap_sentiment") as mock_r:
         mock_r.side_effect = [0.2, 0.0]
         out = enrich_cheap_sentiment([a, b], use_local=False)
     assert mock_r.call_count == 2
@@ -113,7 +113,7 @@ def test_file_cache_avoids_second_local_call(tmp_path):
     fc = FileCache(tmp_path, default_ttl_sec=3600)
     a = _article(raw=None, title="Same", summary="body")
     with patch(
-        "pipeline.sentiment.local_sentiment_minus1_to_1",
+        "pipeline.news.sentiment.local_sentiment_minus1_to_1",
         return_value=0.5,
     ) as mock_local:
         s1 = resolve_cheap_sentiment(a, use_local=True, model_name="m", cache=fc)
@@ -159,7 +159,7 @@ def test_price_boost_applied_as_floor_over_finbert():
         raw=None,
         title="Nebius Stock Jumped 15% on Its Meta Deal. Is This the Next CoreWeave?",
     )
-    with patch("pipeline.sentiment.local_sentiment_minus1_to_1", return_value=0.0):
+    with patch("pipeline.news.sentiment.local_sentiment_minus1_to_1", return_value=0.0):
         s = resolve_cheap_sentiment(a, use_local=True, model_name="m")
     assert s == pytest.approx(0.8)
 
@@ -169,7 +169,7 @@ def test_price_boost_does_not_override_stronger_finbert():
     from pipeline.sentiment import resolve_cheap_sentiment
 
     a = _article(raw=None, title="Stock gains 3% after blowout quarter")
-    with patch("pipeline.sentiment.local_sentiment_minus1_to_1", return_value=0.95):
+    with patch("pipeline.news.sentiment.local_sentiment_minus1_to_1", return_value=0.95):
         s = resolve_cheap_sentiment(a, use_local=True, model_name="m")
     assert s == pytest.approx(0.95)
 
@@ -179,7 +179,7 @@ def test_price_boost_negative_floor():
     from pipeline.sentiment import resolve_cheap_sentiment
 
     a = _article(raw=None, title="ASML Stock Sinks 7% on Export Curb News")
-    with patch("pipeline.sentiment.local_sentiment_minus1_to_1", return_value=-0.1):
+    with patch("pipeline.news.sentiment.local_sentiment_minus1_to_1", return_value=-0.1):
         s = resolve_cheap_sentiment(a, use_local=True, model_name="m")
     assert s == pytest.approx(-0.6)
 

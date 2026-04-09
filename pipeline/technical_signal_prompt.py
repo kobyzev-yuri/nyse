@@ -27,7 +27,7 @@ if __name__ == "__main__" and __package__ is None:
 from domain import TechnicalSnapshot, Ticker, TickerData, TickerMetrics
 
 from .market_dto import MetricsInput, TechnicalAgentInput, TechnicalTickerInput
-from .technical.candle_features import calculate_candle_features
+from .tech.agents.candle_features import calculate_candle_features
 
 # Дословно из pystockinvest/agent/market/agent.py
 SYSTEM_PROMPT = """

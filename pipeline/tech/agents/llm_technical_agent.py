@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, List, Optional, Sequence
 
 from domain import TechnicalSignal, Ticker, TickerData, TickerMetrics
 
-from ..cache import FileCache
-from ..technical_signal_runner import run_technical_signal_pipeline
+from ...cache import FileCache
+from ...technical_signal_runner import run_technical_signal_pipeline
 
 if TYPE_CHECKING:
     from config_loader import OpenAISettings

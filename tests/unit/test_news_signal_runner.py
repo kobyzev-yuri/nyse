@@ -155,7 +155,7 @@ def test_full_bad_cached_json_raises_value_error(tmp_path):
     llm, _ = _mock_llm(_llm_items(1))
     # Симулируем повреждённый кэш: get_or_set_llm_text возвращает невалидный JSON
     with patch(
-        "pipeline.news_signal_runner.get_or_set_llm_text",
+        "pipeline.news.news_signal_runner.get_or_set_llm_text",
         return_value="not-valid-json",
     ):
         with pytest.raises(ValueError, match="invalid"):

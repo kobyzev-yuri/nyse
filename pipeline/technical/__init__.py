@@ -1,23 +1,5 @@
-from .candle_features import calculate_candle_features
-from .lse_heuristic_agent import LseHeuristicAgent
-from .protocol import TechnicalAgentProtocol
+from __future__ import annotations
 
-__all__ = [
-    "LseHeuristicAgent",
-    "TechnicalAgentProtocol",
-    "calculate_candle_features",
-    "LlmTechnicalAgent",
-]
+"""Совместимость: старый импорт ``pipeline.technical`` → ``pipeline.tech.agents``."""
 
-
-def __getattr__(name: str):
-    """``LlmTechnicalAgent`` подгружается лениво (нужен ``langchain_core``)."""
-    if name == "LlmTechnicalAgent":
-        from .llm_technical_agent import LlmTechnicalAgent
-
-        return LlmTechnicalAgent
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    return list(__all__)
+from ..tech.agents import *  # noqa: F401,F403
