@@ -14,6 +14,9 @@ CLI: выделенный новостной пайплайн (как коман
 
 Выход:
   - JSON-объект с articles/draft/gate/(optional) aggregated_llm
+
+Реализация новостей в коде: ``pipeline/news/`` (корень ``pipeline/*.py`` — shim-реэкспорты).
+См. также: ``docs/news_pipeline_cli.md``.
 """
 
 from __future__ import annotations
@@ -51,7 +54,11 @@ def _add_repo_root_to_syspath() -> None:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="run_news_pipeline",
-        description="Run NYSE news pipeline (same as Telegram /news).",
+        description="Run NYSE news pipeline (same logic as Telegram /news), JSON to stdout.",
+        epilog=(
+            "Docs: docs/news_pipeline_cli.md · Code: pipeline/news/ · "
+            "Requires config.env in repo root (or env vars) for API keys / calendar."
+        ),
     )
     p.add_argument("ticker", help="Ticker, e.g. MU")
     p.add_argument(
@@ -88,6 +95,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Write JSON to this path (optional). Default: stdout.",
     )
     return p.parse_args(argv)
+
 
 def _dt_iso(dt: object) -> Optional[str]:
     if dt is None:

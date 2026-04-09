@@ -93,12 +93,12 @@ python scripts/calibrate_gate.py --profile context --tickers MSFT META NVDA --da
 | Ур. | Модуль | Вход | Выход | LLM |
 |-----|--------|------|-------|-----|
 | 0 | `pipeline/ingest.py` | `NewsArticle[]` (несколько источников) | дедупл. `NewsArticle[]` | — |
-| 1 | `pipeline/channels.py` | заголовок + summary | `NewsImpactChannel` | — |
-| 2 | `pipeline/sentiment.py` | текст статьи | `cheap_sentiment` | — |
-| 3 | `pipeline/draft.py` | оценённые статьи | `DraftImpulse` | — |
-| 4 | `pipeline/gates.py` | `DraftImpulse` + `GateContext` | `LLMMode` | — |
-| 5 | `pipeline/news_signal_runner.py` | отобранные статьи | `AggregatedNewsSignal` | **да** |
-| 6 | `pipeline/trade_builder.py` | `SignalBundle` (tech + news + calendar) | `Trade` | — |
+| 1 | `pipeline/news/channels.py` (shim: `pipeline/channels.py`) | заголовок + summary | `NewsImpactChannel` | — |
+| 2 | `pipeline/news/sentiment.py` (shim: `pipeline/sentiment.py`) | текст статьи | `cheap_sentiment` | — |
+| 3 | `pipeline/news/draft.py` (shim: `pipeline/draft.py`) | оценённые статьи | `DraftImpulse` | — |
+| 4 | `pipeline/news/gates.py` (shim: `pipeline/gates.py`) | `DraftImpulse` + `GateContext` | `LLMMode` | — |
+| 5 | `pipeline/news/news_signal_runner.py` (shim: `pipeline/news_signal_runner.py`) | отобранные статьи | `AggregatedNewsSignal` | **да** |
+| 6 | `pipeline/trade/trade_builder.py` (shim: `pipeline/trade_builder.py`) | `SignalBundle` (tech + news + calendar) | `Trade` | — |
 
 Логика уровня 6 совпадает с **`pystockinvest/agent/trade.py`** (fusion 55/30/15, confidence, LIMIT/MARKET, TP/SL).
 
