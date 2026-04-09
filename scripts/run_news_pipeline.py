@@ -13,7 +13,7 @@ CLI: выделенный новостной пайплайн (как коман
   - (опционально) structured LLM-агрегат (run_news_signal_pipeline)
 
 Выход:
-  - JSON-объект с articles/draft/gate/(optional) aggregated_llm
+  - JSON-объект с calendar/geopolitics/articles/draft/gate/(optional) aggregated_llm
 
 Реализация новостей в коде: ``pipeline/news/`` (корень ``pipeline/*.py`` — shim-реэкспорты).
 См. также: ``docs/news_pipeline_cli.md``.
@@ -133,31 +133,67 @@ def run(
     cfg = PROFILE_GAME5M if profile == "game5m" else PROFILE_CONTEXT
 
     ticker = Ticker(ticker_val)
+    now = datetime.now(timezone.utc)
+    # Экономический календарь (Investing.com JSON), тот же источник, что в боте.
+    # Важно: не импортируем bot/nyse_bot.py, чтобы не требовать python-telegram-bot в окружении CLI.
+    cal_events: list = []
+    calendar_load_error: str | None = None
+    try:
+        from domain import Currency
+        from sources.ecalendar import Source as CalendarSource
+
+        cal_events = list(CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar())
+    except Exception as exc:
+        calendar_load_error = f"{type(exc).__name__}: {exc}"
+
+    def _cal_event_dict(e: object) -> dict:
+        from domain import CalendarEvent
+
+        if not isinstance(e, CalendarEvent):
+            return {"error": "not_a_calendar_event"}
+        t = e.time
+        if isinstance(t, datetime):
+            tu = t.astimezone(timezone.utc) if t.tzinfo else t.replace(tzinfo=timezone.utc)
+            delta_min = (tu - now).total_seconds() / 60.0
+        else:
+            tu, delta_min = None, None
+        cur = getattr(e.currency, "value", str(e.currency))
+        return {
+            "name": e.name,
+            "time_utc": _dt_iso(tu) if tu is not None else None,
+            "importance": e.importance.value,
+            "currency": cur,
+            "country": e.country,
+            "category": e.category,
+            "delta_minutes_from_now": None if delta_min is None else round(delta_min, 1),
+        }
+
     articles = NewsSource(max_per_ticker=max_per_ticker, lookback_hours=lookback_hours).get_articles([ticker])
     articles = [a for a in articles if a.ticker == ticker]
     if not articles:
+        calendar_events_json = [_cal_event_dict(e) for e in cal_events[:100]]
         return {
             "ticker": ticker_val,
             "lookback_hours": lookback_hours,
             "max_per_ticker": max_per_ticker,
             "profile": profile,
-            "now_utc": _dt_iso(datetime.now(timezone.utc)),
+            "now_utc": _dt_iso(now),
             "error": "no_articles",
+            "calendar": {
+                "source": "investing.com (sources.ecalendar, GBP/JPY/EUR)",
+                "event_count": len(cal_events),
+                "events_preview": calendar_events_json,
+                "load_error": calendar_load_error,
+            },
+            "geopolitics": {
+                "regime_articles": [],
+                "policy_articles": [],
+                "counts": {"regime": 0, "policy_rates": 0},
+            },
             "articles": [],
         }
 
     articles = enrich_cheap_sentiment(articles)
-
-    now = datetime.now(timezone.utc)
-    # Экономический календарь (Investing.com JSON), тот же источник, что в боте.
-    # Важно: не импортируем bot/nyse_bot.py, чтобы не требовать python-telegram-bot в окружении CLI.
-    try:
-        from domain import Currency
-        from sources.ecalendar import Source as CalendarSource
-
-        cal_events = CalendarSource([Currency.GBP, Currency.JPY, Currency.EUR]).get_calendar()
-    except Exception:
-        cal_events = []
 
     scored = scored_from_news_articles(articles)
     di = draft_impulse(scored, now=now)
@@ -231,12 +267,30 @@ def run(
         for a in llm_batch_articles
     ]
 
+    regime_articles = [a for a in articles_json if a.get("channel") == "regime"]
+    policy_articles = [a for a in articles_json if a.get("channel") == "policy_rates"]
+    calendar_events_json = [_cal_event_dict(e) for e in cal_events[:100]]
+
     out: dict = {
         "ticker": ticker_val,
         "lookback_hours": lookback_hours,
         "max_per_ticker": max_per_ticker,
         "profile": profile,
         "now_utc": _dt_iso(now),
+        "calendar": {
+            "source": "investing.com (sources.ecalendar, GBP/JPY/EUR)",
+            "event_count": len(cal_events),
+            "events_preview": calendar_events_json,
+            "load_error": calendar_load_error,
+        },
+        "geopolitics": {
+            "regime_articles": regime_articles,
+            "policy_articles": policy_articles,
+            "counts": {
+                "regime": len(regime_articles),
+                "policy_rates": len(policy_articles),
+            },
+        },
         "articles": articles_json,
         "draft_impulse": {
             "draft_bias_incremental": di.draft_bias_incremental,

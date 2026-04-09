@@ -27,10 +27,14 @@
 
 JSON включает:
 
+- **`calendar`**: тот же источник, что у `/news` (Investing.com через `sources.ecalendar`, валюты GBP/JPY/EUR). Поля: `event_count`, `events_preview` (до 100 событий: имя, `time_utc`, важность, валюта, страна, категория, `delta_minutes_from_now`), `load_error` при сбое сети/парсинга.
+- **`geopolitics`**: явная выборка по каналам как в HTML-блоках REG / политика ставок: `regime_articles`, `policy_articles` (подмножества `articles[]` с `channel` = `regime` / `policy_rates`) и `counts`.
 - **`articles[]`**: заголовок/summary/link/provider_id/published_at_utc, канал (`channel`) + rule-confidence, `cheap_sentiment`, `raw_sentiment`
 - **`draft_impulse`** и **`single_scalar_draft_bias`**
 - **`gate`**: `llm_mode`, `reason`, `calendar_high_soon`, `regime_present`, и т.д.
 - **`aggregated_news_signal`**: появляется только если LLM реально вызывался (см. ниже)
+
+Для крупных тикеров и порогов гейта, ближе к режиму контекста бота, можно указать **`--profile context`** (по умолчанию скрипт использует `game5m`).
 
 ### Примеры
 
