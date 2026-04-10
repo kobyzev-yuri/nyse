@@ -63,12 +63,31 @@ class NewsSignalLLMItem(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=False)
 
     article_index: int = Field(ge=1, description="1-based index in the prompt list.")
-    sentiment: float = Field(ge=-1.0, le=1.0)
-    impact_strength: NewsImpact
-    relevance: NewsRelevance
-    surprise: NewsSurprise
-    time_horizon: NewsTimeHorizon
-    confidence: float = Field(ge=0.0, le=1.0)
+    sentiment: float = Field(
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Expected direction/strength of price impact on the target ticker (−1 bearish … +1 bullish); "
+            "not raw article tone if the ticker is peripheral."
+        ),
+    )
+    impact_strength: NewsImpact = Field(
+        description="Expected magnitude of move given the sign of sentiment (low/moderate/high)."
+    )
+    relevance: NewsRelevance = Field(
+        description="How central the target ticker is to the story; feeds aggregation weight."
+    )
+    surprise: NewsSurprise = Field(
+        description="Surprise vs expectations; stored for UI/trace, not used in bias weight formula."
+    )
+    time_horizon: NewsTimeHorizon = Field(
+        description="When the effect mainly materializes; feeds aggregation weight (shorter horizons weighted higher)."
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Certainty in this per-article signal; feeds aggregation weight (floored at 0.05).",
+    )
 
 
 class NewsSignalLLMResponse(BaseModel):

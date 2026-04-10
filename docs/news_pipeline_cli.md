@@ -4,6 +4,17 @@
 
 Код новостного конвейера в репозитории: пакет **`pipeline/news/`** (каналы, sentiment, draft, гейт, `news_signal_*`). Старые импорты вида `from pipeline.sentiment import …` по-прежнему работают через shim-файлы в корне `pipeline/`.
 
+### Structured LLM (L5): промпт и bias
+
+| Что | Файл в nyse |
+|-----|-------------|
+| System + user шаблон, `PROMPT_VERSION` | `pipeline/news/news_signal_prompt.py` |
+| Поля ответа LLM (Pydantic) | `pipeline/news/news_dto.py` (`NewsSignalLLMItem`, …) |
+| Разбор JSON → домен | `pipeline/news/news_signal_schema.py` |
+| Взвешенный **bias** / confidence | `pipeline/news/news_signal_aggregator.py` (`aggregate_news_signals`) |
+
+В репозитории **tradenews** (оценка Ollama) ядро тех же строк лежит в `tradenews/prompt_news_signal.py`; паритет с nyse проверяет `tradenews/tests/test_nyse_news_prompt_parity.py`. К user-сообщению для Ollama добавлен явный JSON-суффикс (в nyse контракт задаётся `with_structured_output`, без перечисления схемы в тексте).
+
 ### Связанные пакеты (кратко)
 
 | Область | Папка в репо | Примечание |

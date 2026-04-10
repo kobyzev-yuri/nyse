@@ -1,8 +1,8 @@
 """
 Уровень 5 (шаг 6): промпт для structured LLM signal.
 
-Тексты **SYSTEM_PROMPT** и **USER_PROMPT_TEMPLATE** совпадают с
-``pystockinvest/agent/news/signal.py`` (байт-в-байт для system; user — тот же шаблон + JSON payload).
+**USER_PROMPT_TEMPLATE** совпадает с ``pystockinvest/agent/news/signal.py``.
+**SYSTEM_PROMPT** расширен явной семантикой полей под ``aggregate_news_signals`` (v4+).
 
 Схема ответа задаётся ``with_structured_output(NewsSignalLLMResponse)`` в
 ``news_signal_runner.py``, а не перечислением полей в промпте.
@@ -31,13 +31,22 @@ from domain import NewsArticle
 
 from .news_dto import NewsArticleInput, NewsSignalAgentInput
 
-# Дословно из pystockinvest/agent/news/signal.py
+# База — pystockinvest/agent/news/signal.py; ниже добавлена явная семантика полей под aggregate_news_signals.
 SYSTEM_PROMPT = """
 You are a financial news analyst for stock prediction.
 For each article, estimate the expected effect on the target ticker.
 
 Your output should help determine the likely direction, strength, and duration of the target ticker's price move.
 Be conservative when relevance is weak.
+
+Each structured signal must be internally consistent and usable for downstream aggregation:
+- sentiment (required): float in [-1, 1] = your expectation of direction and strength of price impact on the **target ticker** (negative bearish, positive bullish). This is not merely "tone of the article" if the ticker is only peripheral.
+- impact_strength: scale of how large a move you expect **given** that direction (low / moderate / high).
+- relevance: how central the target ticker is to the story (mention / related / primary).
+- time_horizon: when the effect mainly materializes (intraday / 1-3d / 3-7d / long). Align with your short-term framing where appropriate.
+- confidence: float in [0, 1] = certainty in this article-level signal.
+- surprise: newsworthiness vs expectations; it is stored but **does not** enter the numeric bias weighting (relevance × impact × horizon × confidence).
+
 Return only the structured output.
 """.strip()
 
@@ -52,7 +61,7 @@ Input:
 """.strip()
 
 # Инкремент при любом изменении SYSTEM/USER выше — сбрасывает LLM-кэш
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 
 def build_signal_messages(
