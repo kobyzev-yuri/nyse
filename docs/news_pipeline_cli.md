@@ -68,6 +68,17 @@ conda run -n py11 python scripts/run_news_pipeline.py MU --pretty --json-out /tm
 conda run -n py11 python scripts/run_news_pipeline.py MU --no-llm --pretty
 ```
 
+Structured signal через **Ollama** (вместо OpenAI), тот же JSON + поле `llm` (`backend`, `model`):
+
+```bash
+conda run -n py11 python scripts/run_news_pipeline.py MU --pretty --json-out /tmp/mu_ollama.json \
+  --ollama-model llama3.2:3b
+# опционально: --ollama-host http://127.0.0.1:11434
+# при необходимости: OLLAMA_KEEP_ALIVE=30m
+```
+
+В выходе: `llm.backend` = `"ollama"` или `"openai"`, `aggregated_news_signal` при `gate.llm_mode=full` — как при OpenAI.
+
 Быстро проверить, что LLM реально отработал:
 
 ```bash

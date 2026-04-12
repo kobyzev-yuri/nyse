@@ -44,6 +44,18 @@ class _JsonOnlyStdout:
     def flush(self) -> None:
         return self._err.flush()
 
+    def isatty(self) -> bool:
+        # FinBERT/transformers/tqdm проверяют sys.stdout.isatty()
+        return False
+
+    def fileno(self) -> int:
+        return self._out.fileno()
+
+    @property
+    def encoding(self) -> str:
+        enc = getattr(self._out, "encoding", None)
+        return enc if isinstance(enc, str) and enc else "utf-8"
+
 
 def _add_repo_root_to_syspath() -> None:
     root = Path(__file__).resolve().parent.parent
@@ -85,6 +97,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Disable structured LLM even if OPENAI_API_KEY is set.",
     )
     p.add_argument(
+        "--ollama-model",
+        default="",
+        metavar="NAME",
+        help=(
+            "Use Ollama for structured news signal (e.g. llama3.2:3b) instead of OpenAI. "
+            "Requires ollama serve; OLLAMA_HOST optional. Implies LLM path when gate allows."
+        ),
+    )
+    p.add_argument(
+        "--ollama-host",
+        default="",
+        help="Ollama base URL (default: OLLAMA_HOST or http://127.0.0.1:11434).",
+    )
+    p.add_argument(
         "--pretty",
         action="store_true",
         help="Pretty-print JSON output.",
@@ -112,7 +138,11 @@ def run(
     max_per_ticker: int,
     profile: str,
     no_llm: bool,
+    ollama_model: str = "",
+    ollama_host: str = "",
 ) -> dict:
+    import os
+
     import config_loader
     from sources.news import Source as NewsSource
     from pipeline.sentiment import enrich_cheap_sentiment
@@ -179,6 +209,7 @@ def run(
             "profile": profile,
             "now_utc": _dt_iso(now),
             "error": "no_articles",
+            "llm": {"backend": None, "model": None, "ollama_host": None},
             "calendar": {
                 "source": "investing.com (sources.ecalendar, GBP/JPY/EUR)",
                 "event_count": len(cal_events),
@@ -216,16 +247,40 @@ def run(
         plan = plan_llm_article_batch(LLMMode.FULL, articles, cfg=cfg)
         llm_batch_articles = [articles[i] for i in plan.indices_for_structured_signal]
 
+    ollama_model_str = (ollama_model or "").strip()
+    ollama_host_str = (ollama_host or "").strip().rstrip("/") or (
+        (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").strip().rstrip("/")
+    )
+
     oai = None if no_llm else config_loader.get_openai_settings()
     news_signal = None
-    if mode in (LLMMode.FULL, LLMMode.LITE) and oai:
-        news_signal = run_news_signal_pipeline(
-            articles,
-            ticker.value,
-            cfg=cfg,
-            mode=mode,
-            settings=oai,
-        )
+    llm_backend: str | None = None
+    llm_model_id: str | None = None
+
+    if not no_llm and mode in (LLMMode.FULL, LLMMode.LITE):
+        if ollama_model_str:
+            from pipeline.news.ollama_signal import run_news_signal_pipeline_ollama
+
+            news_signal = run_news_signal_pipeline_ollama(
+                articles,
+                ticker.value,
+                cfg=cfg,
+                mode=mode,
+                ollama_model=ollama_model_str,
+                ollama_host=ollama_host_str,
+            )
+            llm_backend = "ollama"
+            llm_model_id = ollama_model_str
+        elif oai is not None:
+            news_signal = run_news_signal_pipeline(
+                articles,
+                ticker.value,
+                cfg=cfg,
+                mode=mode,
+                settings=oai,
+            )
+            llm_backend = "openai"
+            llm_model_id = oai.model
 
     def _channel_to_str(ch: object) -> str:
         if isinstance(ch, NewsImpactChannel):
@@ -318,6 +373,11 @@ def run(
             "count": len(llm_batch_titles),
             "articles": llm_batch_titles,
         },
+        "llm": {
+            "backend": llm_backend,
+            "model": llm_model_id,
+            "ollama_host": ollama_host_str if ollama_model_str else None,
+        },
         "aggregated_news_signal": None,
     }
 
@@ -357,6 +417,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_per_ticker=args.max_per_ticker,
         profile=args.profile,
         no_llm=bool(args.no_llm),
+        ollama_model=str(args.ollama_model or ""),
+        ollama_host=str(args.ollama_host or ""),
     )
 
     s = json.dumps(payload, ensure_ascii=False, indent=2 if args.pretty else None)
