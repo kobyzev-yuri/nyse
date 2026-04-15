@@ -58,6 +58,23 @@ python scripts/calibrate_gate.py --profile context --tickers MSFT META NVDA --da
 - **`scripts/run_bot.py`** — точка входа: подхватывает `config.env`, настраивает логирование, берёт `TELEGRAM_BOT_TOKEN` и запускает `app.run_polling(...)`.
 - **`bot/nyse_bot.py`** — модуль с логикой и хендлерами команд (строит `Application` через `build_application(...)`). Его обычно **не запускают напрямую**.
 
+### Docker на сервере (как LSE)
+
+1. Положите `config.env` рядом с репозиторием: `~/nyse/config.env` (не коммитьте).
+2. Сборка и запуск:
+   ```bash
+   cd ~/nyse
+   docker compose up -d --build
+   docker logs -f nyse-bot
+   ```
+3. Обновление с GitHub (аналог `lse/scripts/deploy_from_github.sh`):
+   ```bash
+   chmod +x ./scripts/deploy_from_github.sh
+   ./scripts/deploy_from_github.sh
+   ```
+   Принудительная пересборка: `./scripts/deploy_from_github.sh --force`  
+   Переменные: `NYSE_REPO_DIR`, `NYSE_SERVICE_NAME` (по умолчанию `nyse-bot`), `NYSE_STOP_BEFORE_BUILD`, `NYSE_DEPLOY_BUILD_PLAIN`.
+
 ---
 
 ## Поток данных

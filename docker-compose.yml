@@ -1,0 +1,16 @@
+# Nyse bot — отдельно от LSE. Конфиг на хосте: ./config.env
+services:
+  nyse-bot:
+    build: .
+    image: nyse-bot:latest
+    container_name: nyse-bot
+    restart: unless-stopped
+    environment:
+      NYSE_CONFIG_PATH: /app/config.env
+    volumes:
+      - ./config.env:/app/config.env:ro
+      # опционально: кэш новостей на хосте (если нужен персистент между рестартами)
+      - nyse-cache:/app/.cache/nyse
+
+volumes:
+  nyse-cache:
