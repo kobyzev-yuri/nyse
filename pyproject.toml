@@ -16,7 +16,8 @@ dependencies = [
     "pydantic>=2.0",
     "langchain-core>=0.2",
     "langchain-openai>=0.2",
-    "python-telegram-bot>=21,<23",
+    # [socks] — если в config.env задан TELEGRAM_PROXY=socks5://... (иначе ImportError socksio)
+    "python-telegram-bot[socks]>=21,<23",
 ]
 
 [tool.setuptools.packages.find]
