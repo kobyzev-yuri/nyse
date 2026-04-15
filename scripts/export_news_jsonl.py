@@ -20,6 +20,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from collections import Counter
 
 
 def _add_repo_root_to_syspath() -> None:
@@ -106,13 +107,20 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     n = 0
+    by_source: Counter[str] = Counter()
+    by_ticker: Counter[str] = Counter()
     with out_path.open("w", encoding="utf-8") as f:
         for a in articles:
+            sym = getattr(getattr(a, "ticker", None), "value", None)
+            if sym:
+                by_ticker[str(sym)] += 1
+            pub = getattr(a, "publisher", None) or "NYSE"
+            by_source[str(pub)] += 1
             rec: Dict[str, Any] = {
                 "ts": _dt_iso(getattr(a, "timestamp", None)),
-                "symbol": getattr(getattr(a, "ticker", None), "value", None),
+                "symbol": sym,
                 "exchange": str(args.exchange or "NYSE").strip().upper(),
-                "source": _safe_str(getattr(a, "publisher", None) or "NYSE"),
+                "source": _safe_str(pub or "NYSE"),
                 "title": _safe_str(getattr(a, "title", None), 2000),
                 "summary": _safe_str(getattr(a, "summary", None), 4000),
                 "url": _safe_str(getattr(a, "link", None), 2000),
@@ -133,7 +141,23 @@ def main() -> None:
             f.write(s + "\n")
             n += 1
 
-    print(json.dumps({"ok": True, "out": str(out_path), "records": n}, ensure_ascii=False, indent=2))
+    # show top sources/tickers for quick sanity checks
+    top_sources = dict(by_source.most_common(20))
+    top_tickers = dict(by_ticker.most_common(50))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "out": str(out_path),
+                "records": n,
+                "tickers_used": [getattr(t, "value", str(t)) for t in tickers],
+                "counts_by_source_top": top_sources,
+                "counts_by_ticker_top": top_tickers,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
