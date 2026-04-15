@@ -107,14 +107,27 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     n = 0
+    dropped_duplicate_url = 0
+    # LSE knowledge_base enforces UNIQUE (ticker, link) when link is set — duplicate URLs
+    # across the batch only re-hit the same KB rows on import (inflated "enriched" counts).
+    seen_ticker_url: set[tuple[str, str]] = set()
     by_source: Counter[str] = Counter()
     by_ticker: Counter[str] = Counter()
     with out_path.open("w", encoding="utf-8") as f:
         for a in articles:
             sym = getattr(getattr(a, "ticker", None), "value", None)
+            sym_s = str(sym).strip().upper() if sym else ""
+            pub = getattr(a, "publisher", None) or "NYSE"
+            url = _safe_str(getattr(a, "link", None), 2000)
+            dedupe_key = (sym_s, url)
+            if url and dedupe_key in seen_ticker_url:
+                dropped_duplicate_url += 1
+                continue
+            if url:
+                seen_ticker_url.add(dedupe_key)
+
             if sym:
                 by_ticker[str(sym)] += 1
-            pub = getattr(a, "publisher", None) or "NYSE"
             by_source[str(pub)] += 1
             rec: Dict[str, Any] = {
                 "ts": _dt_iso(getattr(a, "timestamp", None)),
@@ -123,7 +136,7 @@ def main() -> None:
                 "source": _safe_str(pub or "NYSE"),
                 "title": _safe_str(getattr(a, "title", None), 2000),
                 "summary": _safe_str(getattr(a, "summary", None), 4000),
-                "url": _safe_str(getattr(a, "link", None), 2000),
+                "url": url,
                 "external_id": _safe_str(getattr(a, "provider_id", None), 512),
                 "raw_payload": {
                     "raw_sentiment": getattr(a, "raw_sentiment", None),
@@ -150,6 +163,7 @@ def main() -> None:
                 "ok": True,
                 "out": str(out_path),
                 "records": n,
+                "dropped_duplicate_ticker_url": dropped_duplicate_url,
                 "tickers_used": [getattr(t, "value", str(t)) for t in tickers],
                 "counts_by_source_top": top_sources,
                 "counts_by_ticker_top": top_tickers,
