@@ -43,7 +43,14 @@ def _safe_str(x: Any, max_len: int = 2000) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Export merged news to JSONL for LSE import")
-    ap.add_argument("--tickers", default="", help="Comma-separated tickers (default: from config/env in sources.news)")
+    ap.add_argument(
+        "--tickers",
+        default="",
+        help=(
+            "Comma-separated tickers. Default: use config_loader.get_game5m_tickers() plus optional "
+            "context tickers from GAME_5M_CORRELATION_CONTEXT / TICKERS_LONG / PREMARKET_STRESS_TICKERS if present."
+        ),
+    )
     ap.add_argument("--lookback-hours", type=int, default=48, help="Lookback window")
     ap.add_argument("--max-per-ticker", type=int, default=40, help="Cap per ticker before export")
     ap.add_argument("--exchange", default="NYSE", help="Exchange label")
@@ -63,12 +70,29 @@ def main() -> None:
     if tickers_raw:
         tickers = [Ticker(t.strip().upper()) for t in tickers_raw.split(",") if t.strip()]
     else:
-        # fallback: use same universe as bot/pipeline (config-driven)
+        # default: GAME_5M tickers + broader market context tickers (if present)
+        base = list(config_loader.get_game5m_tickers() or [])
+        extra: list = []
+        # LSE-style keys may be injected via NYSE_CONFIG_PATH pointing to lse/config.env
+        from config_loader import get_config_value
+
+        raw_ctx = (get_config_value("GAME_5M_CORRELATION_CONTEXT", "") or "").strip()
+        raw_long = (get_config_value("TICKERS_LONG", "") or "").strip()
+        raw_stress = (get_config_value("PREMARKET_STRESS_TICKERS", "") or "").strip()
+        # Parse using the same tolerant parser (unknown tickers skipped)
         try:
-            tl = config_loader.get_tickers_list()
-            tickers = [Ticker(t.strip().upper()) for t in tl if t.strip()]
+            extra.extend(config_loader._parse_ticker_list(raw_ctx))
+            extra.extend(config_loader._parse_ticker_list(raw_long))
+            # stress tickers in LSE often include FX/futures; unknown will be skipped
+            extra.extend(config_loader._parse_ticker_list(raw_stress))
         except Exception:
-            tickers = []
+            pass
+        seen = {t for t in base}
+        for t in extra:
+            if t not in seen:
+                base.append(t)
+                seen.add(t)
+        tickers = base
     if not tickers:
         print("No tickers provided and config tickers empty.", file=sys.stderr)
         sys.exit(2)
